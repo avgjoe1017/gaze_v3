@@ -1,0 +1,8 @@
+# This directory holds platform-specific engine binaries
+# Built by scripts/build-engine.ps1 or scripts/build-engine.sh
+#
+# Expected files after build:
+# - gaze-engine-x86_64-pc-windows-msvc.exe (Windows)
+# - gaze-engine-aarch64-apple-darwin (macOS ARM)
+# - gaze-engine-x86_64-apple-darwin (macOS Intel)
+# - gaze-engine-x86_64-unknown-linux-gnu (Linux)

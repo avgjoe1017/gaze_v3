@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(npm install)",
+      "Bash(cargo --version:*)",
+      "Bash(rustc:*)",
+      "Bash(where:*)",
+      "Bash(timeout:*)",
+      "Bash(curl:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(python -m engine.main:*)",
+      "Bash(npm run dev:*)",
+      "Skill(frontend-design)",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)",
+      "Bash(cmd //c \"taskkill /PID 10092 /F\")",
+      "Bash(findstr:*)",
+      "Bash(cmd //c \"taskkill /PID 15444 /F\")",
+      "Bash(cmd //c \"taskkill /PID 25220 /F\")",
+      "Bash(npm run tauri:*)",
+      "Bash(cargo check:*)",
+      "Bash(powershell.exe -Command \"$BinaryDir = ''C:\\\\Users\\\\joeba\\\\Documents\\\\gaze_v3\\\\app\\\\src-tauri\\\\binaries''; $StubPath = Join-Path $BinaryDir ''gaze-engine-x86_64-pc-windows-msvc.exe''; $minimalPE = [byte[]]@\\(0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x0E, 0x1F, 0xBA, 0x0E, 0x00, 0xB4, 0x09, 0xCD, 0x21, 0xB8, 0x01, 0x4C, 0xCD, 0x21, 0x44, 0x65, 0x76, 0x20, 0x73, 0x74, 0x75, 0x62, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00\\); [System.IO.File]::WriteAllBytes\\($StubPath, $minimalPE\\); Write-Host ''Stub created''\")",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -File \"C:\\\\Users\\\\joeba\\\\Documents\\\\gaze_v3\\\\scripts\\\\create-stub.ps1\")",
+      "Bash(python -c:*)",
+      "Bash(tasklist /FI \"PID eq 28028\")",
+      "Bash(powershell.exe -Command \"Stop-Process -Id 28028 -Force -ErrorAction SilentlyContinue; Write-Host ''Process killed''\")",
+      "Bash(powershell.exe -Command \"Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force; Write-Host ''Killed python processes''\")",
+      "Bash(powershell.exe -Command \"Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force; Write-Host ''Done''\")",
+      "Bash(npx tsc:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(pip:*)",
+      "Bash(npm run build:*)",
+      "Bash(ls:*)"
+    ]
+  }
+}

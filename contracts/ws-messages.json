@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gaze WebSocket Messages",
+  "description": "WebSocket message schemas for Gaze V3",
+  "definitions": {
+    "subscribe": {
+      "type": "object",
+      "required": ["type", "topics"],
+      "properties": {
+        "type": { "const": "subscribe" },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["models", "jobs", "scans", "errors"]
+          }
+        }
+      }
+    },
+    "unsubscribe": {
+      "type": "object",
+      "required": ["type", "topics"],
+      "properties": {
+        "type": { "const": "unsubscribe" },
+        "topics": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "model_download_progress": {
+      "type": "object",
+      "required": ["type", "model", "progress"],
+      "properties": {
+        "type": { "const": "model_download_progress" },
+        "model": { "type": "string" },
+        "progress": { "type": "number", "minimum": 0, "maximum": 1 },
+        "bytes_downloaded": { "type": "integer" },
+        "bytes_total": { "type": "integer" }
+      }
+    },
+    "model_download_complete": {
+      "type": "object",
+      "required": ["type", "model"],
+      "properties": {
+        "type": { "const": "model_download_complete" },
+        "model": { "type": "string" }
+      }
+    },
+    "model_download_error": {
+      "type": "object",
+      "required": ["type", "model", "error"],
+      "properties": {
+        "type": { "const": "model_download_error" },
+        "model": { "type": "string" },
+        "error": { "type": "string" }
+      }
+    },
+    "scan_started": {
+      "type": "object",
+      "required": ["type", "library_id"],
+      "properties": {
+        "type": { "const": "scan_started" },
+        "library_id": { "type": "string" }
+      }
+    },
+    "scan_progress": {
+      "type": "object",
+      "required": ["type", "library_id"],
+      "properties": {
+        "type": { "const": "scan_progress" },
+        "library_id": { "type": "string" },
+        "files_found": { "type": "integer" },
+        "files_new": { "type": "integer" },
+        "files_changed": { "type": "integer" },
+        "files_deleted": { "type": "integer" }
+      }
+    },
+    "scan_complete": {
+      "type": "object",
+      "required": ["type", "library_id"],
+      "properties": {
+        "type": { "const": "scan_complete" },
+        "library_id": { "type": "string" },
+        "files_found": { "type": "integer" },
+        "files_new": { "type": "integer" },
+        "files_changed": { "type": "integer" },
+        "files_deleted": { "type": "integer" }
+      }
+    },
+    "job_started": {
+      "type": "object",
+      "required": ["type", "job_id", "video_id"],
+      "properties": {
+        "type": { "const": "job_started" },
+        "job_id": { "type": "string" },
+        "video_id": { "type": "string" }
+      }
+    },
+    "job_progress": {
+      "type": "object",
+      "required": ["type", "job_id", "video_id", "stage", "progress"],
+      "properties": {
+        "type": { "const": "job_progress" },
+        "job_id": { "type": "string" },
+        "video_id": { "type": "string" },
+        "stage": {
+          "type": "string",
+          "enum": ["extracting_audio", "transcribing", "extracting_frames", "embedding", "detecting"]
+        },
+        "progress": { "type": "number", "minimum": 0, "maximum": 1 },
+        "message": { "type": "string" }
+      }
+    },
+    "job_complete": {
+      "type": "object",
+      "required": ["type", "job_id", "video_id"],
+      "properties": {
+        "type": { "const": "job_complete" },
+        "job_id": { "type": "string" },
+        "video_id": { "type": "string" }
+      }
+    },
+    "job_failed": {
+      "type": "object",
+      "required": ["type", "job_id", "video_id", "stage", "error_code", "error_message"],
+      "properties": {
+        "type": { "const": "job_failed" },
+        "job_id": { "type": "string" },
+        "video_id": { "type": "string" },
+        "stage": { "type": "string" },
+        "error_code": { "type": "string" },
+        "error_message": { "type": "string" }
+      }
+    },
+    "consistency_repair": {
+      "type": "object",
+      "required": ["type", "repairs"],
+      "properties": {
+        "type": { "const": "consistency_repair" },
+        "repairs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "action": { "type": "string" },
+              "target": { "type": "string" },
+              "details": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": ["type", "code", "message"],
+      "properties": {
+        "type": { "const": "error" },
+        "code": { "type": "string" },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}

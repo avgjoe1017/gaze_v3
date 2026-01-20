@@ -1,0 +1,1567 @@
+openapi: 3.1.0
+info:
+  title: Gaze Engine API
+  version: 3.0.0
+  description: Privacy-first local video search engine API
+
+servers:
+  - url: http://127.0.0.1:{port}
+    variables:
+      port:
+        default: "48100"
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Engine health and readiness
+      security: []
+      responses:
+        "200":
+          description: Engine health status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /models:
+    get:
+      operationId: listModels
+      summary: List available models and download status
+      responses:
+        "200":
+          description: List of models
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelsResponse"
+    post:
+      operationId: downloadModel
+      summary: Start model download
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DownloadModelRequest"
+      responses:
+        "200":
+          description: Download started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DownloadModelResponse"
+
+  /models/{model_name}/progress:
+    get:
+      operationId: getModelDownloadProgress
+      summary: Get download progress for a specific model
+      parameters:
+        - name: model_name
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [whisper-base, openclip-vit-b-32, ssdlite320-mobilenet-v3]
+      responses:
+        "200":
+          description: Download progress
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [complete, downloading, pending, error]
+                  progress:
+                    type: number
+                    minimum: 0
+                    maximum: 1
+                  error:
+                    type: string
+        "404":
+          description: Model not found
+
+  /libraries:
+    get:
+      operationId: listLibraries
+      summary: List all libraries
+      responses:
+        "200":
+          description: List of libraries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibrariesResponse"
+    post:
+      operationId: addLibrary
+      summary: Add a library (folder path)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddLibraryRequest"
+      responses:
+        "200":
+          description: Library added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Library"
+
+  /libraries/{id}:
+    get:
+      operationId: getLibrary
+      summary: Get library details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Library details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Library"
+    delete:
+      operationId: deleteLibrary
+      summary: Remove library and all indexed data
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Library deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /libraries/{id}/scan:
+    post:
+      operationId: scanLibrary
+      summary: Trigger rescan for new/changed/deleted files
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Scan started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanResponse"
+
+  /videos:
+    get:
+      operationId: listVideos
+      summary: List videos with pagination and filtering
+      parameters:
+        - name: library_id
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of videos
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideosResponse"
+
+  /videos/{id}:
+    get:
+      operationId: getVideo
+      summary: Get video details and indexing status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Video details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Video"
+
+  /videos/{id}/frames:
+    get:
+      operationId: listVideoFrames
+      summary: List sampled thumbnail frames for a video
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 15
+            minimum: 1
+            maximum: 50
+      responses:
+        "200":
+          description: List of frames
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FramesResponse"
+
+  /assets/thumbnail:
+    get:
+      operationId: getThumbnail
+      summary: Serve a thumbnail image from the thumbnails directory
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Thumbnail image
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        "403":
+          description: Forbidden
+        "404":
+          description: Not found
+
+  /search:
+    post:
+      operationId: search
+      summary: Multi-modal search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+
+  /jobs:
+    get:
+      operationId: listJobs
+      summary: List active jobs
+      responses:
+        "200":
+          description: List of jobs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobsResponse"
+
+  /jobs/{id}:
+    get:
+      operationId: getJob
+      summary: Get job status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+    delete:
+      operationId: cancelJob
+      summary: Cancel job
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Job cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /jobs/start:
+    post:
+      operationId: startIndexing
+      summary: Start indexing for queued videos
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Indexing started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  message:
+                    type: string
+
+  /settings:
+    get:
+      operationId: getSettings
+      summary: Get all settings
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+    patch:
+      operationId: updateSettings
+      summary: Update settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettingsUpdate"
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+
+  /logs:
+    get:
+      operationId: getLogs
+      summary: Get log entries from the log file
+      parameters:
+        - name: lines
+          in: query
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 10000
+        - name: tail
+          in: query
+          schema:
+            type: boolean
+            default: true
+        - name: level
+          in: query
+          schema:
+            type: string
+            enum: [DEBUG, INFO, WARNING, ERROR, CRITICAL]
+      responses:
+        "200":
+          description: Log entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogsResponse"
+
+  /search/export/captions/{video_id}:
+    get:
+      operationId: exportCaptions
+      summary: Export captions as SRT or VTT
+      parameters:
+        - name: video_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [srt, vtt]
+            default: srt
+      responses:
+        "200":
+          description: Caption file
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /stats:
+    get:
+      operationId: getStats
+      summary: Get comprehensive analytics and statistics
+      responses:
+        "200":
+          description: Statistics and analytics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsResponse"
+
+  /shutdown:
+    post:
+      operationId: shutdown
+      summary: Graceful shutdown
+      responses:
+        "200":
+          description: Shutdown initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+
+  # Face Recognition Endpoints
+  /faces:
+    get:
+      operationId: listFaces
+      summary: List faces with optional filters
+      parameters:
+        - name: video_id
+          in: query
+          schema:
+            type: string
+          description: Filter by video
+        - name: person_id
+          in: query
+          schema:
+            type: string
+          description: Filter by person
+        - name: unassigned
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Only show unassigned faces
+        - name: cluster_id
+          in: query
+          schema:
+            type: string
+          description: Filter by cluster
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 1000
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: List of faces
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FacesResponse"
+
+  /faces/{face_id}:
+    get:
+      operationId: getFace
+      summary: Get a single face by ID
+      parameters:
+        - name: face_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Face details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Face"
+        "404":
+          description: Face not found
+    delete:
+      operationId: deleteFace
+      summary: Delete a face
+      parameters:
+        - name: face_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Face deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  face_id:
+                    type: string
+
+  /faces/{face_id}/assign:
+    post:
+      operationId: assignFaceToPerson
+      summary: Assign a face to a person
+      parameters:
+        - name: face_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignFaceRequest"
+      responses:
+        "200":
+          description: Face assigned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  face_id:
+                    type: string
+                  person_id:
+                    type: string
+
+  /faces/{face_id}/similar:
+    get:
+      operationId: findSimilarFaces
+      summary: Find faces similar to the given face
+      parameters:
+        - name: face_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: threshold
+          in: query
+          schema:
+            type: number
+            default: 0.5
+            minimum: 0
+            maximum: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Similar faces
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimilarFacesResponse"
+
+  /faces/persons:
+    get:
+      operationId: listPersons
+      summary: List all named persons
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+          description: Search by name
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 1000
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: List of persons
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PersonsResponse"
+    post:
+      operationId: createPerson
+      summary: Create a new named person
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePersonRequest"
+      responses:
+        "200":
+          description: Person created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Person"
+
+  /faces/persons/{person_id}:
+    get:
+      operationId: getPerson
+      summary: Get a single person by ID
+      parameters:
+        - name: person_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Person details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Person"
+        "404":
+          description: Person not found
+    put:
+      operationId: updatePerson
+      summary: Update a person's name or thumbnail
+      parameters:
+        - name: person_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePersonRequest"
+      responses:
+        "200":
+          description: Person updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Person"
+    delete:
+      operationId: deletePerson
+      summary: Delete a person
+      parameters:
+        - name: person_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: unassign_faces
+          in: query
+          schema:
+            type: boolean
+            default: true
+          description: Unassign faces instead of deleting them
+      responses:
+        "200":
+          description: Person deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  person_id:
+                    type: string
+
+  /faces/merge:
+    post:
+      operationId: mergeFaces
+      summary: Merge multiple faces into a person
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MergeFacesRequest"
+      responses:
+        "200":
+          description: Faces merged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  person_id:
+                    type: string
+                  faces_merged:
+                    type: integer
+
+  /faces/cluster:
+    post:
+      operationId: clusterFaces
+      summary: Cluster unassigned faces by similarity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClusterFacesRequest"
+      responses:
+        "200":
+          description: Clusters created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClustersResponse"
+
+  /faces/stats:
+    get:
+      operationId: getFaceStats
+      summary: Get face-related statistics
+      responses:
+        "200":
+          description: Face statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FaceStatsResponse"
+
+  /assets/face:
+    get:
+      operationId: getFaceCrop
+      summary: Serve a face crop image
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Absolute face crop path
+      responses:
+        "200":
+          description: Face crop image
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        "403":
+          description: Forbidden
+        "404":
+          description: Face crop not found
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - engine_uuid
+        - models_ready
+        - uptime_ms
+      properties:
+        status:
+          type: string
+          enum: [starting, ready, error]
+        models_ready:
+          type: boolean
+        missing_models:
+          type: array
+          items:
+            type: string
+        engine_uuid:
+          type: string
+        uptime_ms:
+          type: integer
+
+    ModelInfo:
+      type: object
+      required:
+        - name
+        - downloaded
+        - size_bytes
+      properties:
+        name:
+          type: string
+        downloaded:
+          type: boolean
+        size_bytes:
+          type: integer
+        download_progress:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    ModelsResponse:
+      type: object
+      required:
+        - models
+      properties:
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelInfo"
+
+    DownloadModelRequest:
+      type: object
+      required:
+        - model
+      properties:
+        model:
+          type: string
+          enum: [whisper-base, openclip-vit-b-32, ssdlite320-mobilenet-v3]
+
+    DownloadModelResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [started, already_downloaded, downloading]
+
+    Library:
+      type: object
+      required:
+        - library_id
+        - folder_path
+        - created_at_ms
+      properties:
+        library_id:
+          type: string
+        folder_path:
+          type: string
+        name:
+          type: string
+        recursive:
+          type: boolean
+        video_count:
+          type: integer
+        indexed_count:
+          type: integer
+        created_at_ms:
+          type: integer
+
+    LibrariesResponse:
+      type: object
+      required:
+        - libraries
+      properties:
+        libraries:
+          type: array
+          items:
+            $ref: "#/components/schemas/Library"
+
+    AddLibraryRequest:
+      type: object
+      required:
+        - folder_path
+      properties:
+        folder_path:
+          type: string
+        name:
+          type: string
+        recursive:
+          type: boolean
+          default: true
+
+    ScanResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [started, already_scanning]
+
+    Video:
+      type: object
+      required:
+        - video_id
+        - library_id
+        - path
+        - filename
+        - status
+        - created_at_ms
+      properties:
+        video_id:
+          type: string
+        library_id:
+          type: string
+        path:
+          type: string
+        filename:
+          type: string
+        file_size:
+          type: integer
+        duration_ms:
+          type: integer
+        width:
+          type: integer
+        height:
+          type: integer
+        status:
+          type: string
+          enum: [QUEUED, EXTRACTING_AUDIO, TRANSCRIBING, EXTRACTING_FRAMES, EMBEDDING, DETECTING, DONE, FAILED, CANCELLED]
+        progress:
+          type: number
+          minimum: 0
+          maximum: 1
+        error_message:
+          type: string
+        thumbnail_path:
+          type: string
+        created_at_ms:
+          type: integer
+        indexed_at_ms:
+          type: integer
+
+    Frame:
+      type: object
+      required:
+        - frame_index
+        - timestamp_ms
+        - thumbnail_path
+      properties:
+        frame_index:
+          type: integer
+        timestamp_ms:
+          type: integer
+        thumbnail_path:
+          type: string
+
+    FramesResponse:
+      type: object
+      required:
+        - frames
+        - total
+      properties:
+        frames:
+          type: array
+          items:
+            $ref: "#/components/schemas/Frame"
+        total:
+          type: integer
+
+    VideosResponse:
+      type: object
+      required:
+        - videos
+        - total
+      properties:
+        videos:
+          type: array
+          items:
+            $ref: "#/components/schemas/Video"
+        total:
+          type: integer
+
+    SearchRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+        mode:
+          type: string
+          enum: [transcript, visual, both]
+          default: both
+        labels:
+          type: array
+          items:
+            type: string
+        library_id:
+          type: string
+        limit:
+          type: integer
+          default: 50
+        offset:
+          type: integer
+          default: 0
+
+    SearchResult:
+      type: object
+      required:
+        - video_id
+        - timestamp_ms
+        - score
+      properties:
+        video_id:
+          type: string
+        timestamp_ms:
+          type: integer
+        score:
+          type: number
+        transcript_snippet:
+          type: string
+        thumbnail_path:
+          type: string
+        labels:
+          type: array
+          items:
+            type: string
+        match_type:
+          type: string
+          enum: [transcript, visual, both]
+
+    SearchResponse:
+      type: object
+      required:
+        - results
+        - total
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchResult"
+        total:
+          type: integer
+        query_time_ms:
+          type: integer
+
+    Job:
+      type: object
+      required:
+        - job_id
+        - video_id
+        - status
+        - created_at_ms
+      properties:
+        job_id:
+          type: string
+        video_id:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, EXTRACTING_AUDIO, TRANSCRIBING, EXTRACTING_FRAMES, EMBEDDING, DETECTING, DONE, FAILED, CANCELLED]
+        current_stage:
+          type: string
+        progress:
+          type: number
+          minimum: 0
+          maximum: 1
+        message:
+          type: string
+        error_code:
+          type: string
+        error_message:
+          type: string
+        created_at_ms:
+          type: integer
+        updated_at_ms:
+          type: integer
+
+    JobsResponse:
+      type: object
+      required:
+        - jobs
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Job"
+
+    Settings:
+      type: object
+      properties:
+        max_concurrent_jobs:
+          type: integer
+        thumbnail_quality:
+          type: integer
+        frame_interval_seconds:
+          type: number
+        transcription_model:
+          type: string
+        transcription_language:
+          type: string
+          nullable: true
+        transcription_backend:
+          type: string
+        transcription_vad_enabled:
+          type: boolean
+        transcription_min_silence_ms:
+          type: integer
+        transcription_silence_threshold_db:
+          type: integer
+        transcription_chunk_seconds:
+          type: number
+          nullable: true
+
+    SettingsUpdate:
+      type: object
+      properties:
+        max_concurrent_jobs:
+          type: integer
+        thumbnail_quality:
+          type: integer
+        frame_interval_seconds:
+          type: number
+        transcription_model:
+          type: string
+        transcription_language:
+          type: string
+          nullable: true
+        transcription_backend:
+          type: string
+        transcription_vad_enabled:
+          type: boolean
+        transcription_min_silence_ms:
+          type: integer
+        transcription_silence_threshold_db:
+          type: integer
+        transcription_chunk_seconds:
+          type: number
+          nullable: true
+
+    LogEntry:
+      type: object
+      required:
+        - line
+        - line_number
+      properties:
+        line:
+          type: string
+        line_number:
+          type: integer
+
+    LogsResponse:
+      type: object
+      required:
+        - entries
+        - total_lines
+        - file_path
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/LogEntry"
+        total_lines:
+          type: integer
+        file_path:
+          type: string
+
+    StatsResponse:
+      type: object
+      required:
+        - storage
+        - database
+        - codecs
+        - location
+      properties:
+        storage:
+          $ref: "#/components/schemas/StorageBreakdown"
+        database:
+          $ref: "#/components/schemas/DatabaseStats"
+        codecs:
+          $ref: "#/components/schemas/CodecStats"
+        location:
+          $ref: "#/components/schemas/LocationStats"
+
+    StorageBreakdown:
+      type: object
+      required:
+        - raw_videos_bytes
+        - indexed_artifacts_bytes
+        - thumbnails_bytes
+        - faiss_shards_bytes
+        - temp_files_bytes
+        - database_bytes
+        - total_bytes
+      properties:
+        raw_videos_bytes:
+          type: integer
+        indexed_artifacts_bytes:
+          type: integer
+        thumbnails_bytes:
+          type: integer
+        faiss_shards_bytes:
+          type: integer
+        temp_files_bytes:
+          type: integer
+        database_bytes:
+          type: integer
+        total_bytes:
+          type: integer
+
+    DatabaseStats:
+      type: object
+      required:
+        - total_videos
+        - indexed_videos
+        - queued_videos
+        - processing_videos
+        - failed_videos
+        - total_segments
+        - total_frames
+        - total_detections
+        - total_libraries
+      properties:
+        total_videos:
+          type: integer
+        indexed_videos:
+          type: integer
+        queued_videos:
+          type: integer
+        processing_videos:
+          type: integer
+        failed_videos:
+          type: integer
+        total_segments:
+          type: integer
+        total_frames:
+          type: integer
+        total_detections:
+          type: integer
+        total_libraries:
+          type: integer
+
+    CodecStats:
+      type: object
+      required:
+        - containers
+        - video_codecs
+        - audio_codecs
+      properties:
+        containers:
+          type: array
+          items:
+            $ref: "#/components/schemas/FormatBreakdown"
+        video_codecs:
+          type: array
+          items:
+            $ref: "#/components/schemas/FormatBreakdown"
+        audio_codecs:
+          type: array
+          items:
+            $ref: "#/components/schemas/FormatBreakdown"
+
+    FormatBreakdown:
+      type: object
+      required:
+        - count
+      properties:
+        container_format:
+          type: string
+          nullable: true
+        video_codec:
+          type: string
+          nullable: true
+        audio_codec:
+          type: string
+          nullable: true
+        count:
+          type: integer
+        total_duration_ms:
+          type: integer
+          nullable: true
+
+    LocationStats:
+      type: object
+      required:
+        - videos_with_location
+        - total_locations
+      properties:
+        videos_with_location:
+          type: integer
+        total_locations:
+          type: integer
+
+    # Face Recognition Schemas
+    Face:
+      type: object
+      required:
+        - face_id
+        - video_id
+        - frame_id
+        - timestamp_ms
+        - bbox_x
+        - bbox_y
+        - bbox_w
+        - bbox_h
+        - confidence
+        - created_at_ms
+      properties:
+        face_id:
+          type: string
+        video_id:
+          type: string
+        frame_id:
+          type: string
+        timestamp_ms:
+          type: integer
+        bbox_x:
+          type: number
+        bbox_y:
+          type: number
+        bbox_w:
+          type: number
+        bbox_h:
+          type: number
+        confidence:
+          type: number
+        crop_path:
+          type: string
+          nullable: true
+        age:
+          type: integer
+          nullable: true
+        gender:
+          type: string
+          nullable: true
+        person_id:
+          type: string
+          nullable: true
+        person_name:
+          type: string
+          nullable: true
+        cluster_id:
+          type: string
+          nullable: true
+        created_at_ms:
+          type: integer
+
+    FacesResponse:
+      type: object
+      required:
+        - faces
+        - total
+      properties:
+        faces:
+          type: array
+          items:
+            $ref: "#/components/schemas/Face"
+        total:
+          type: integer
+
+    Person:
+      type: object
+      required:
+        - person_id
+        - name
+        - face_count
+        - created_at_ms
+        - updated_at_ms
+      properties:
+        person_id:
+          type: string
+        name:
+          type: string
+        face_count:
+          type: integer
+        thumbnail_face_id:
+          type: string
+          nullable: true
+        thumbnail_crop_path:
+          type: string
+          nullable: true
+        created_at_ms:
+          type: integer
+        updated_at_ms:
+          type: integer
+
+    PersonsResponse:
+      type: object
+      required:
+        - persons
+        - total
+      properties:
+        persons:
+          type: array
+          items:
+            $ref: "#/components/schemas/Person"
+        total:
+          type: integer
+
+    CreatePersonRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        face_ids:
+          type: array
+          items:
+            type: string
+
+    UpdatePersonRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        thumbnail_face_id:
+          type: string
+
+    AssignFaceRequest:
+      type: object
+      required:
+        - person_id
+      properties:
+        person_id:
+          type: string
+
+    MergeFacesRequest:
+      type: object
+      required:
+        - face_ids
+      properties:
+        face_ids:
+          type: array
+          items:
+            type: string
+        person_id:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+
+    ClusterFacesRequest:
+      type: object
+      properties:
+        threshold:
+          type: number
+          default: 0.6
+          minimum: 0
+          maximum: 1
+        video_id:
+          type: string
+          nullable: true
+
+    FaceCluster:
+      type: object
+      required:
+        - cluster_id
+        - face_count
+        - sample_faces
+      properties:
+        cluster_id:
+          type: string
+        face_count:
+          type: integer
+        sample_faces:
+          type: array
+          items:
+            $ref: "#/components/schemas/Face"
+
+    ClustersResponse:
+      type: object
+      required:
+        - clusters
+        - total
+      properties:
+        clusters:
+          type: array
+          items:
+            $ref: "#/components/schemas/FaceCluster"
+        total:
+          type: integer
+
+    SimilarFacesResponse:
+      type: object
+      required:
+        - faces
+        - similarities
+      properties:
+        faces:
+          type: array
+          items:
+            $ref: "#/components/schemas/Face"
+        similarities:
+          type: array
+          items:
+            type: number
+
+    FaceStatsResponse:
+      type: object
+      required:
+        - total_faces
+        - assigned_faces
+        - unassigned_faces
+        - total_persons
+        - unique_clusters
+        - videos_with_faces
+      properties:
+        total_faces:
+          type: integer
+        assigned_faces:
+          type: integer
+        unassigned_faces:
+          type: integer
+        total_persons:
+          type: integer
+        unique_clusters:
+          type: integer
+        videos_with_faces:
+          type: integer

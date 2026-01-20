@@ -1,0 +1,1526 @@
+import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+
+// Icons
+const FolderIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+  </svg>
+);
+
+const PlusIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <line x1="12" y1="5" x2="12" y2="19" />
+    <line x1="5" y1="12" x2="19" y2="12" />
+  </svg>
+);
+
+const SearchIcon = ({ className }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <circle cx="11" cy="11" r="8" />
+    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+  </svg>
+);
+
+const MicIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+  </svg>
+);
+
+const ImageIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+    <circle cx="8.5" cy="8.5" r="1.5" />
+    <polyline points="21 15 16 10 5 21" />
+  </svg>
+);
+
+const BoxIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+  </svg>
+);
+
+const FilmIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18" />
+    <line x1="7" y1="2" x2="7" y2="22" />
+    <line x1="17" y1="2" x2="17" y2="22" />
+    <line x1="2" y1="12" x2="22" y2="12" />
+    <line x1="2" y1="7" x2="7" y2="7" />
+    <line x1="2" y1="17" x2="7" y2="17" />
+    <line x1="17" y1="17" x2="22" y2="17" />
+    <line x1="17" y1="7" x2="22" y2="7" />
+  </svg>
+);
+
+const CheckIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <polyline points="20 6 9 17 4 12" />
+  </svg>
+);
+
+const RefreshIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <polyline points="23 4 23 10 17 10" />
+    <polyline points="1 20 1 14 7 14" />
+    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+  </svg>
+);
+
+const LoaderIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <line x1="12" y1="2" x2="12" y2="6" />
+    <line x1="12" y1="18" x2="12" y2="22" />
+    <line x1="4.93" y1="4.93" x2="7.76" y2="7.76" />
+    <line x1="16.24" y1="16.24" x2="19.07" y2="19.07" />
+  </svg>
+);
+
+const ActivityIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+  </svg>
+);
+
+const CloseIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <line x1="18" y1="6" x2="6" y2="18" />
+    <line x1="6" y1="6" x2="18" y2="18" />
+  </svg>
+);
+
+const ChevronDownIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+);
+
+const AlertCircleIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" y1="8" x2="12" y2="12" />
+    <line x1="12" y1="16" x2="12.01" y2="16" />
+  </svg>
+);
+
+const RetryIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <polyline points="1 4 1 10 7 10" />
+    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+  </svg>
+);
+
+const PlayIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <polygon points="5 3 19 12 5 21 5 3" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+const ShieldIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 2l7 4v6c0 5-3.5 9-7 10-3.5-1-7-5-7-10V6l7-4z" />
+  </svg>
+);
+
+const UsersIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="3" />
+    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+    <path d="M16 3.13a3 3 0 0 1 0 5.74" />
+  </svg>
+);
+
+const isTauri = typeof window !== "undefined" && "__TAURI__" in window;
+
+interface Library {
+  library_id: string;
+  folder_path: string;
+  name: string;
+  video_count: number;
+  indexed_count: number;
+}
+
+interface Video {
+  video_id: string;
+  filename: string;
+  duration_ms?: number;
+  status: string;
+  progress: number;
+  thumbnail_path?: string;
+  error_code?: string;
+  error_message?: string;
+}
+
+interface VideoDetails {
+  video_id: string;
+  filename: string;
+  path: string;
+  duration_ms?: number;
+}
+
+type SearchMode = "all" | "transcript" | "visual" | "objects";
+
+const ALL_LIBRARIES_ID = "__all__";
+
+interface ScanProgressEvent {
+  library_id: string;
+  files_found: number;
+  files_new: number;
+  files_changed: number;
+  files_deleted: number;
+}
+
+interface JobProgressEvent {
+  job_id: string;
+  video_id: string;
+  stage?: string;
+  progress?: number;
+  message?: string;
+  type: string;
+}
+
+interface PersonMatch {
+  person_id: string;
+  name: string;
+  face_count: number;
+}
+
+interface SearchResult {
+  video_id: string;
+  timestamp_ms: number;
+  score: number;
+  transcript_snippet?: string | null;
+  thumbnail_path?: string | null;
+  labels?: string[] | null;
+  persons?: PersonMatch[] | null;
+  match_type: "transcript" | "visual" | "both";
+}
+
+interface Person {
+  person_id: string;
+  name: string;
+  face_count: number;
+  thumbnail_face_id?: string;
+}
+
+interface FrameInfo {
+  frame_index: number;
+  timestamp_ms: number;
+  thumbnail_path: string;
+}
+
+interface FramesResponse {
+  frames: FrameInfo[];
+  total: number;
+}
+
+interface SearchResponse {
+  results: SearchResult[];
+  total: number;
+  query_time_ms?: number;
+}
+
+interface GroupedSearchResult {
+  video_id: string;
+  filename: string;
+  moments: SearchResult[];
+  best_score: number;
+  best_thumbnail?: string | null;
+}
+
+interface MainViewProps {
+  scanProgress?: Map<string, ScanProgressEvent>;
+  jobProgress?: Map<string, JobProgressEvent>;
+}
+
+interface HoverPreviewProps {
+  videoId: string;
+  className: string;
+  baseThumbnail?: string | null;
+  resolveAssetUrl: (path?: string | null) => string;
+  overlay?: ReactNode;
+  placeholder: ReactNode;
+  limit?: number;
+  onClick?: () => void;
+}
+
+const HoverPreview = ({
+  videoId,
+  className,
+  baseThumbnail,
+  resolveAssetUrl,
+  overlay,
+  placeholder,
+  limit = 15,
+  onClick,
+}: HoverPreviewProps) => {
+  const [frames, setFrames] = useState<string[]>([]);
+  const [frameIndex, setFrameIndex] = useState(0);
+  const [hovering, setHovering] = useState(false);
+  const [loadState, setLoadState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const intervalRef = useRef<number | null>(null);
+
+  const fetchFrames = useCallback(async () => {
+    if (loadState === "loading") return;
+    setLoadState("loading");
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      const data = await apiRequest<FramesResponse>(
+        `/videos/${videoId}/frames?limit=${limit}`
+      );
+      const rawPaths = data.frames.map((frame) => frame.thumbnail_path).filter(Boolean);
+      setFrames(rawPaths);
+      setLoadState("ready");
+    } catch (err) {
+      console.error("Failed to load preview frames:", err);
+      setLoadState("error");
+    }
+  }, [limit, loadState, videoId]);
+
+  useEffect(() => {
+    if (!hovering || frames.length < 2) return;
+    intervalRef.current = window.setInterval(() => {
+      setFrameIndex((idx) => (idx + 1) % frames.length);
+    }, 1000);
+    return () => {
+      if (intervalRef.current) {
+        window.clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [frames.length, hovering]);
+
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) {
+        window.clearInterval(intervalRef.current);
+      }
+    };
+  }, []);
+
+  const handleMouseEnter = () => {
+    setHovering(true);
+    if (frames.length === 0 && loadState !== "loading") {
+      fetchFrames();
+    }
+  };
+
+  const handleMouseLeave = () => {
+    setHovering(false);
+    setFrameIndex(0);
+  };
+
+  const currentSrc = hovering && frames.length > 0
+    ? resolveAssetUrl(frames[frameIndex])
+    : resolveAssetUrl(baseThumbnail) || resolveAssetUrl(frames[0]) || "";
+
+  return (
+    <div
+      className={className}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onClick={onClick}
+      onFocus={handleMouseEnter}
+      onBlur={handleMouseLeave}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : -1}
+    >
+      {currentSrc ? <img src={currentSrc} alt="" /> : placeholder}
+      {overlay}
+    </div>
+  );
+};
+
+export function MainView({ scanProgress, jobProgress }: MainViewProps) {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchMode, setSearchMode] = useState<SearchMode>("all");
+  const [libraries, setLibraries] = useState<Library[]>([]);
+  const [selectedLibrary, setSelectedLibrary] = useState<string | null>(null);
+  const [videos, setVideos] = useState<Video[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [indexingStarting, setIndexingStarting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [showStatusPanel, setShowStatusPanel] = useState(false);
+  const [expandedVideos, setExpandedVideos] = useState<Set<string>>(new Set());
+  const [activeVideo, setActiveVideo] = useState<(VideoDetails & { timestamp_ms: number }) | null>(null);
+  const [playerLoading, setPlayerLoading] = useState(false);
+  const [playerError, setPlayerError] = useState<string | null>(null);
+  const [apiBaseUrl, setApiBaseUrl] = useState<string>("");
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Person filtering state
+  const [persons, setPersons] = useState<Person[]>([]);
+  const [selectedPersons, setSelectedPersons] = useState<string[]>([]);
+  const [showPersonPicker, setShowPersonPicker] = useState(false);
+  const personPickerRef = useRef<HTMLDivElement | null>(null);
+
+  // Close person picker when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (personPickerRef.current && !personPickerRef.current.contains(e.target as Node)) {
+        setShowPersonPicker(false);
+      }
+    };
+    if (showPersonPicker) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showPersonPicker]);
+
+
+  // Fetch libraries and persons on mount
+  useEffect(() => {
+    fetchLibraries();
+    fetchPersons();
+  }, []);
+
+  const fetchPersons = async () => {
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      const data = await apiRequest<{ persons: Person[] }>("/faces/persons");
+      setPersons(data.persons || []);
+    } catch (err) {
+      console.error("Failed to fetch persons:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (isTauri) return;
+    let mounted = true;
+    const loadBaseUrl = async () => {
+      try {
+        const { getApiBaseUrl } = await import("../lib/apiClient");
+        const baseUrl = await getApiBaseUrl();
+        if (mounted) {
+          setApiBaseUrl(baseUrl);
+        }
+      } catch (err) {
+        console.error("Failed to resolve API base URL:", err);
+      }
+    };
+    loadBaseUrl();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Fetch videos when library changes (only if not searching)
+  useEffect(() => {
+    if (selectedLibrary && !isSearching) {
+      fetchVideos(selectedLibrary);
+    }
+  }, [selectedLibrary, isSearching]);
+
+  // Refresh libraries and videos when scan completes
+  useEffect(() => {
+    if (!scanProgress) return;
+
+    scanProgress.forEach((scan) => {
+      if ((scan as { type?: string }).type === "scan_complete") {
+        fetchLibraries();
+        if (
+          selectedLibrary === scan.library_id ||
+          selectedLibrary === ALL_LIBRARIES_ID
+        ) {
+          fetchVideos(selectedLibrary);
+        }
+      }
+    });
+  }, [scanProgress, selectedLibrary]);
+
+  // Update video progress from WebSocket job events
+  useEffect(() => {
+    if (!jobProgress) return;
+
+    setVideos(prevVideos => {
+      let updated = false;
+      const newVideos = prevVideos.map(video => {
+        const job = Array.from(jobProgress.values()).find(j => j.video_id === video.video_id);
+        if (job) {
+          updated = true;
+          if (job.type === "job_complete") {
+            return { ...video, status: "DONE", progress: 1 };
+          } else if (job.type === "job_progress" && job.progress !== undefined) {
+            return { ...video, progress: job.progress, status: job.stage || video.status };
+          }
+        }
+        return video;
+      });
+      return updated ? newVideos : prevVideos;
+    });
+  }, [jobProgress]);
+
+  const fetchLibraries = async () => {
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      const data = await apiRequest<{ libraries: Library[] }>("/libraries");
+      const libs = data.libraries || [];
+      let nextLibraries = libs;
+
+      if (libs.length > 0) {
+        const totals = libs.reduce(
+          (acc, lib) => {
+            acc.video_count += lib.video_count || 0;
+            acc.indexed_count += lib.indexed_count || 0;
+            return acc;
+          },
+          { video_count: 0, indexed_count: 0 }
+        );
+
+        const allLibraries: Library = {
+          library_id: ALL_LIBRARIES_ID,
+          folder_path: "",
+          name: "All Libraries",
+          video_count: totals.video_count,
+          indexed_count: totals.indexed_count,
+        };
+        nextLibraries = [allLibraries, ...libs];
+      }
+
+      setLibraries(nextLibraries);
+
+      if (!selectedLibrary && nextLibraries.length > 0) {
+        setSelectedLibrary(nextLibraries[0].library_id);
+      } else if (
+        selectedLibrary &&
+        !nextLibraries.some((lib) => lib.library_id === selectedLibrary)
+      ) {
+        setSelectedLibrary(nextLibraries[0]?.library_id ?? null);
+      }
+    } catch (err) {
+      console.error("Failed to fetch libraries:", err);
+    }
+  };
+
+  const fetchVideos = async (libraryId: string) => {
+    setLoading(true);
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      const endpoint =
+        libraryId === ALL_LIBRARIES_ID
+          ? "/videos"
+          : `/videos?library_id=${encodeURIComponent(libraryId)}`;
+      const data = await apiRequest<{ videos: Video[]; total: number }>(endpoint);
+      setVideos(data.videos || []);
+    } catch (err) {
+      console.error("Failed to fetch videos:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAddLibrary = async () => {
+    // For now, prompt for folder path
+    const folderPath = prompt("Enter folder path:");
+    if (!folderPath) return;
+
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      await apiRequest<Library>("/libraries", {
+        method: "POST",
+        body: JSON.stringify({ folder_path: folderPath }),
+      });
+      fetchLibraries();
+    } catch (err) {
+      console.error("Failed to add library:", err);
+    }
+  };
+
+  const handleStartIndexing = async () => {
+    setIndexingStarting(true);
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      const data = await apiRequest<{ status: string; message: string }>(
+        "/jobs/start?limit=10",
+        { method: "POST" }
+      );
+      console.log("Indexing started:", data);
+      // Refresh videos to show status updates
+      if (selectedLibrary) {
+        setTimeout(() => fetchVideos(selectedLibrary), 1000);
+      }
+    } catch (err) {
+      console.error("Failed to start indexing:", err);
+    } finally {
+      setIndexingStarting(false);
+    }
+  };
+
+  const handleRetryVideo = async (videoId: string) => {
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      // Reset video status to QUEUED
+      await apiRequest<void>(`/videos/${videoId}/retry`, { method: "POST" });
+      // Refresh videos list
+      if (selectedLibrary) {
+        fetchVideos(selectedLibrary);
+      }
+    } catch (err) {
+      console.error("Failed to retry video:", err);
+    }
+  };
+
+  const handleSyncLibrary = async () => {
+    if (!selectedLibrary || selectedLibrary === ALL_LIBRARIES_ID) {
+      // Sync all libraries
+      setSyncing(true);
+      try {
+        const { apiRequest } = await import("../lib/apiClient");
+        for (const lib of libraries) {
+          if (lib.library_id !== ALL_LIBRARIES_ID) {
+            await apiRequest<{ status: string }>(
+              `/libraries/${lib.library_id}/scan`,
+              { method: "POST" }
+            );
+          }
+        }
+      } catch (err) {
+        console.error("Failed to sync libraries:", err);
+      } finally {
+        setSyncing(false);
+      }
+    } else {
+      // Sync selected library
+      setSyncing(true);
+      try {
+        const { apiRequest } = await import("../lib/apiClient");
+        await apiRequest<{ status: string }>(
+          `/libraries/${selectedLibrary}/scan`,
+          { method: "POST" }
+        );
+      } catch (err) {
+        console.error("Failed to sync library:", err);
+      } finally {
+        setSyncing(false);
+      }
+    }
+  };
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedQuery = searchQuery.trim();
+
+    // Allow search with just person filter (no query) or with a query
+    if (!trimmedQuery && selectedPersons.length === 0) {
+      // Clear search if query is empty and no persons selected
+      setSearchResults([]);
+      setIsSearching(false);
+      if (selectedLibrary) {
+        fetchVideos(selectedLibrary);
+      }
+      return;
+    }
+
+    setSearchLoading(true);
+    setIsSearching(true);
+
+    try {
+      const labels =
+        searchMode === "objects"
+          ? trimmedQuery.split(",").map((label) => label.trim()).filter(Boolean)
+          : undefined;
+
+      if (searchMode === "objects" && (!labels || labels.length === 0)) {
+        setSearchResults([]);
+        setSearchLoading(false);
+        return;
+      }
+
+      // Map frontend searchMode to backend mode
+      const backendMode: "transcript" | "visual" | "both" =
+        searchMode === "all"
+          ? "both"
+          : searchMode === "transcript"
+            ? "transcript"
+            : searchMode === "visual"
+              ? "visual"
+              : "both";
+
+      const requestBody: {
+        query: string;
+        mode: "transcript" | "visual" | "both";
+        labels?: string[];
+        person_ids?: string[];
+        library_id?: string;
+        limit: number;
+      } = {
+        query: searchMode === "objects" ? "" : trimmedQuery,
+        mode: backendMode,
+        limit: 50,
+      };
+
+      if (selectedLibrary) {
+        if (selectedLibrary !== ALL_LIBRARIES_ID) {
+          requestBody.library_id = selectedLibrary;
+        }
+      }
+      if (labels && labels.length > 0) {
+        requestBody.labels = labels;
+      }
+      if (selectedPersons.length > 0) {
+        requestBody.person_ids = selectedPersons;
+      }
+
+      // Use apiClient for authenticated requests
+      const { apiRequest } = await import("../lib/apiClient");
+      const data = await apiRequest<SearchResponse>("/search", {
+        method: "POST",
+        body: JSON.stringify(requestBody),
+      });
+
+      setSearchResults(data.results || []);
+    } catch (err) {
+      console.error("Failed to search:", err);
+      setSearchResults([]);
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  const formatDuration = (ms?: number) => {
+    if (!ms) return "--:--";
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  };
+
+  const formatTimestamp = (ms: number) => {
+    const totalSeconds = Math.floor(ms / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+    }
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  };
+
+  const getLibraryName = (lib: Library) => {
+    return lib.name || lib.folder_path.split(/[/\\]/).pop() || "Library";
+  };
+
+  const getLibraryScan = (libraryId: string) => {
+    if (!scanProgress) return null;
+    return scanProgress.get(libraryId);
+  };
+
+  const resolveAssetUrl = useCallback(
+    (path?: string | null) => {
+      if (!path) return "";
+      if (isTauri) {
+        return convertFileSrc(path);
+      }
+      if (!apiBaseUrl) {
+        return "";
+      }
+      return `${apiBaseUrl}/assets/thumbnail?path=${encodeURIComponent(path)}`;
+    },
+    [apiBaseUrl]
+  );
+
+  const resolveVideoUrl = useCallback(
+    (path?: string | null) => {
+      if (!path) return "";
+      if (isTauri) {
+        const url = convertFileSrc(path);
+        console.log("[Video] Tauri URL:", url);
+        return url;
+      }
+      if (!apiBaseUrl) {
+        console.warn("[Video] No API base URL available");
+        return "";
+      }
+      const url = `${apiBaseUrl}/assets/video?path=${encodeURIComponent(path)}`;
+      console.log("[Video] Web URL:", url);
+      return url;
+    },
+    [apiBaseUrl]
+  );
+
+  const openPlayer = async (videoId: string, timestampMs: number = 0) => {
+    setPlayerLoading(true);
+    setPlayerError(null);
+    setActiveVideo(null);
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      const data = await apiRequest<VideoDetails>(`/videos/${videoId}`);
+      // Start 3 seconds before the timestamp for context (but not before 0)
+      const adjustedTimestamp = Math.max(0, timestampMs - 3000);
+      setActiveVideo({ ...data, timestamp_ms: adjustedTimestamp });
+    } catch (err) {
+      console.error("Failed to load video details:", err);
+      setPlayerError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPlayerLoading(false);
+    }
+  };
+
+  // Group search results by video
+  const groupedSearchResults = useMemo((): GroupedSearchResult[] => {
+    if (!searchResults.length) return [];
+
+    const groups = new Map<string, GroupedSearchResult>();
+
+    for (const result of searchResults) {
+      const existing = groups.get(result.video_id);
+      const video = videos.find((v) => v.video_id === result.video_id);
+
+      if (existing) {
+        existing.moments.push(result);
+        if (result.score > existing.best_score) {
+          existing.best_score = result.score;
+          existing.best_thumbnail = result.thumbnail_path;
+        }
+      } else {
+        groups.set(result.video_id, {
+          video_id: result.video_id,
+          filename: video?.filename || result.video_id,
+          moments: [result],
+          best_score: result.score,
+          best_thumbnail: result.thumbnail_path,
+        });
+      }
+    }
+
+    // Sort groups by best score descending
+    return Array.from(groups.values()).sort((a, b) => b.best_score - a.best_score);
+  }, [searchResults, videos]);
+
+  const toggleVideoExpanded = (videoId: string) => {
+    setExpandedVideos((prev) => {
+      const next = new Set(prev);
+      if (next.has(videoId)) {
+        next.delete(videoId);
+      } else {
+        next.add(videoId);
+      }
+      return next;
+    });
+  };
+
+  const closePlayer = () => {
+    setActiveVideo(null);
+    setPlayerError(null);
+    setPlayerLoading(false);
+  };
+
+  useEffect(() => {
+    if (!activeVideo || !videoRef.current) return;
+    if (videoRef.current.readyState >= 1) {
+      videoRef.current.currentTime = activeVideo.timestamp_ms / 1000;
+    }
+  }, [activeVideo]);
+
+  const handlePlayerLoaded = () => {
+    if (!activeVideo || !videoRef.current) return;
+    videoRef.current.currentTime = activeVideo.timestamp_ms / 1000;
+  };
+
+  return (
+    <div className="main-view">
+      {/* Sidebar */}
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <div className="sidebar-title">Libraries</div>
+          <button
+            className="btn-icon"
+            onClick={() => setShowStatusPanel(true)}
+            title="View indexing status"
+            style={{ marginTop: -4 }}
+          >
+            <ActivityIcon />
+          </button>
+        </div>
+
+        <div className="sidebar-content">
+          <div className="library-list">
+            {libraries.map((lib) => {
+              const scan = getLibraryScan(lib.library_id);
+              const isScanning = scan && (scan as { type?: string }).type !== "scan_complete";
+
+              return (
+                <div
+                  key={lib.library_id}
+                  className={`library-item ${selectedLibrary === lib.library_id ? "active" : ""} ${isScanning ? "scanning" : ""}`}
+                  onClick={() => setSelectedLibrary(lib.library_id)}
+                >
+                  <div className="library-icon">
+                    {isScanning ? <div className="spinner" style={{ width: 18, height: 18 }} /> : <FolderIcon />}
+                  </div>
+                  <div className="library-info">
+                    <div className="library-name">{getLibraryName(lib)}</div>
+                    <div className="library-meta">
+                      {isScanning
+                        ? `Scanning... ${scan?.files_found || 0} files found`
+                        : `${lib.indexed_count}/${lib.video_count} indexed`
+                      }
+                    </div>
+                  </div>
+                  <div className="library-badge">{isScanning ? scan?.files_new || 0 : lib.video_count}</div>
+                </div>
+              );
+            })}
+
+            {libraries.length === 0 && (
+              <div className="empty-state" style={{ padding: "40px 20px" }}>
+                <div className="empty-state-icon" style={{ width: 56, height: 56, marginBottom: 16 }}>
+                  <FolderIcon />
+                </div>
+                <h3 style={{ fontSize: 14 }}>No libraries</h3>
+                <p style={{ fontSize: 12 }}>Add a folder to get started</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="sidebar-footer">
+          {libraries.length > 0 && (
+            <button
+              className="btn add-library-btn"
+              onClick={handleSyncLibrary}
+              disabled={syncing}
+              style={{ marginBottom: 8, width: "100%" }}
+            >
+              {syncing ? (
+                <>
+                  <div className="spinner" style={{ width: 16, height: 16 }} />
+                  Syncing...
+                </>
+              ) : (
+                <>
+                  <RefreshIcon />
+                  Sync Files
+                </>
+              )}
+            </button>
+          )}
+          {videos.some((v) => v.status === "QUEUED") && (
+            <button
+              className="btn add-library-btn"
+              onClick={handleStartIndexing}
+              disabled={indexingStarting}
+              style={{ marginBottom: 8, width: "100%" }}
+            >
+              {indexingStarting ? (
+                <>
+                  <div className="spinner" style={{ width: 16, height: 16 }} />
+                  Starting...
+                </>
+              ) : (
+                <>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}>
+                    <polygon points="5 3 19 12 5 21 5 3" fill="currentColor" stroke="none" />
+                  </svg>
+                  Start Indexing
+                </>
+              )}
+            </button>
+          )}
+          <button className="btn add-library-btn" onClick={handleAddLibrary}>
+            <PlusIcon />
+            Add Folder
+          </button>
+        </div>
+      </aside>
+
+      {/* Content Area */}
+      <div className="content-area">
+        {/* Search Section */}
+        <div className="search-section">
+          <div className="welcome-row">
+            <div className="welcome-text">
+              <span className="welcome-kicker">Modern Family Library</span>
+              <h2>All your photos and videos, organized and searchable.</h2>
+              <p>
+                Everything stays on this device - no cloud uploads, no exposure, and no AI training.
+              </p>
+              <div className="welcome-pills">
+                <span>Local-only</span>
+                <span>Offline-first</span>
+                <span>Private by design</span>
+              </div>
+            </div>
+            <div className="welcome-cards">
+              <div className="welcome-card">
+                <div className="welcome-icon">
+                  <ShieldIcon />
+                </div>
+                <div>
+                  <h4>Private by default</h4>
+                  <p>No cloud copies. Nothing leaves your device.</p>
+                </div>
+              </div>
+              <div className="welcome-card">
+                <div className="welcome-icon">
+                  <UsersIcon />
+                </div>
+                <div>
+                  <h4>Family-ready</h4>
+                  <p>Keep everyone’s memories tidy and easy to find.</p>
+                </div>
+              </div>
+              <div className="welcome-card">
+                <div className="welcome-icon">
+                  <SearchIcon />
+                </div>
+                <div>
+                  <h4>Smart search</h4>
+                  <p>Find people, places, and moments instantly.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <form onSubmit={handleSearch} className="search-container">
+            <input
+              type="text"
+              className="search-input"
+              placeholder="Search your photos and videos..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            <SearchIcon className="search-icon" />
+          </form>
+
+          <div className="filter-chips">
+            <button
+              className={`chip ${searchMode === "all" ? "active" : ""}`}
+              onClick={() => setSearchMode("all")}
+            >
+              All
+            </button>
+            <button
+              className={`chip ${searchMode === "transcript" ? "active" : ""}`}
+              onClick={() => setSearchMode("transcript")}
+            >
+              <MicIcon />
+              Transcript
+            </button>
+            <button
+              className={`chip ${searchMode === "visual" ? "active" : ""}`}
+              onClick={() => setSearchMode("visual")}
+            >
+              <ImageIcon />
+              Visual
+            </button>
+            <button
+              className={`chip ${searchMode === "objects" ? "active" : ""}`}
+              onClick={() => setSearchMode("objects")}
+            >
+              <BoxIcon />
+              Objects
+            </button>
+
+            {/* Person filter */}
+            {persons.length > 0 && (
+              <div className="person-filter-container" ref={personPickerRef}>
+                <button
+                  className={`chip ${selectedPersons.length > 0 ? "active" : ""}`}
+                  onClick={() => setShowPersonPicker(!showPersonPicker)}
+                >
+                  <UsersIcon />
+                  People {selectedPersons.length > 0 && `(${selectedPersons.length})`}
+                </button>
+                {showPersonPicker && (
+                  <div className="person-picker-dropdown">
+                    <div className="person-picker-header">
+                      <span>Filter by person</span>
+                      {selectedPersons.length > 0 && (
+                        <button
+                          className="btn-link"
+                          onClick={() => setSelectedPersons([])}
+                        >
+                          Clear all
+                        </button>
+                      )}
+                    </div>
+                    <div className="person-picker-list">
+                      {persons.map((person) => (
+                        <label key={person.person_id} className="person-picker-item">
+                          <input
+                            type="checkbox"
+                            checked={selectedPersons.includes(person.person_id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedPersons([...selectedPersons, person.person_id]);
+                              } else {
+                                setSelectedPersons(selectedPersons.filter(id => id !== person.person_id));
+                              }
+                            }}
+                          />
+                          <span className="person-picker-name">{person.name}</span>
+                          <span className="person-picker-count">{person.face_count}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="person-picker-footer">
+                      <button
+                        className="btn btn-small btn-primary"
+                        onClick={() => {
+                          setShowPersonPicker(false);
+                          if (selectedPersons.length > 0 || searchQuery.trim()) {
+                            handleSearch({ preventDefault: () => {} } as React.FormEvent);
+                          }
+                        }}
+                      >
+                        Apply Filter
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Video Grid / Search Results */}
+        <div className="video-grid-container">
+          {isSearching ? (
+            searchLoading ? (
+              <div className="empty-state">
+                <div className="spinner spinner-large" />
+                <p>Searching...</p>
+              </div>
+            ) : groupedSearchResults.length > 0 ? (
+              <div className="search-results">
+              <div className="results-header">
+                <div className="results-count">
+                  <strong>{searchResults.length}</strong> moments across <strong>{groupedSearchResults.length}</strong> items
+                </div>
+                {searchQuery && (
+                  <div className="results-count">
+                    for "{searchQuery}"
+                  </div>
+                  )}
+                </div>
+                {groupedSearchResults.map((group) => {
+                  const isExpanded = expandedVideos.has(group.video_id);
+                  const hasMultipleMoments = group.moments.length > 1;
+                  const bestMoment = group.moments[0];
+
+                  return (
+                    <div key={group.video_id} className="result-group">
+                      {/* Main result card - shows best moment */}
+                      <div
+                        className="result-card result-card-main"
+                        onClick={() => openPlayer(group.video_id, bestMoment.timestamp_ms)}
+                      >
+                        <HoverPreview
+                          videoId={group.video_id}
+                          className="result-thumbnail"
+                          baseThumbnail={group.best_thumbnail ?? undefined}
+                          resolveAssetUrl={resolveAssetUrl}
+                          limit={15}
+                          overlay={
+                            <span className="result-timestamp">
+                              {formatTimestamp(bestMoment.timestamp_ms)}
+                            </span>
+                          }
+                          placeholder={
+                            <div className="video-thumbnail-placeholder">
+                              <FilmIcon />
+                            </div>
+                          }
+                        />
+                        <div className="result-content">
+                          <div className="result-video-title">
+                            {group.filename}
+                          </div>
+                          {bestMoment.transcript_snippet && (
+                            <div
+                              className="result-snippet"
+                              dangerouslySetInnerHTML={{ __html: bestMoment.transcript_snippet }}
+                            />
+                          )}
+                          <div className="result-tags">
+                            {(bestMoment.match_type === "both" ? ["transcript", "visual"] : [bestMoment.match_type]).map((tag) => (
+                              <span key={tag} className={`result-tag ${tag}`}>
+                                {tag.charAt(0).toUpperCase() + tag.slice(1)}
+                              </span>
+                            ))}
+                            {bestMoment.labels?.map((label) => (
+                              <span key={label} className="result-tag object">
+                                {label}
+                              </span>
+                            ))}
+                            {bestMoment.persons?.map((person) => (
+                              <span key={person.person_id} className="result-tag person">
+                                <UsersIcon />
+                                {person.name}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="result-actions">
+                          <button
+                            className="btn-icon play-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openPlayer(group.video_id, bestMoment.timestamp_ms);
+                            }}
+                            title="Play"
+                          >
+                            <PlayIcon />
+                          </button>
+                          {hasMultipleMoments && (
+                            <button
+                              className={`btn-icon expand-btn ${isExpanded ? "expanded" : ""}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleVideoExpanded(group.video_id);
+                              }}
+                              title={isExpanded ? "Collapse" : `Show all ${group.moments.length} moments`}
+                            >
+                              <span className="moment-count">{group.moments.length}</span>
+                              <ChevronDownIcon />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Expanded moments list */}
+                      {isExpanded && hasMultipleMoments && (
+                        <div className="result-moments">
+                          {group.moments.slice(1).map((moment, idx) => (
+                            <div
+                              key={`${moment.video_id}-${moment.timestamp_ms}-${idx}`}
+                              className="result-moment"
+                              onClick={() => openPlayer(moment.video_id, moment.timestamp_ms)}
+                            >
+                              <div className="moment-thumbnail">
+                                {moment.thumbnail_path ? (
+                                  <img
+                                    src={resolveAssetUrl(moment.thumbnail_path)}
+                                    alt=""
+                                    loading="lazy"
+                                  />
+                                ) : (
+                                  <div className="video-thumbnail-placeholder">
+                                    <FilmIcon />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="moment-info">
+                                <span className="moment-timestamp">
+                                  {formatTimestamp(moment.timestamp_ms)}
+                                </span>
+                                {moment.transcript_snippet && (
+                                  <span
+                                    className="moment-snippet"
+                                    dangerouslySetInnerHTML={{ __html: moment.transcript_snippet }}
+                                  />
+                                )}
+                              </div>
+                              <button
+                                className="btn-icon play-btn-small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openPlayer(moment.video_id, moment.timestamp_ms);
+                                }}
+                                title="Play"
+                              >
+                                <PlayIcon />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="empty-state">
+                <div className="empty-state-icon">
+                  <SearchIcon />
+                </div>
+                <h3>No results found</h3>
+                <p>Try adjusting your search query or filters.</p>
+              </div>
+            )
+          ) : loading ? (
+            <div className="empty-state">
+              <div className="spinner spinner-large" />
+              <p>Loading your library...</p>
+            </div>
+          ) : videos.length > 0 ? (
+            <div className="video-grid">
+              {videos.map((video) => (
+                <div
+                  key={video.video_id}
+                  className="video-card"
+                  onClick={() => openPlayer(video.video_id, 0)}
+                >
+                    <HoverPreview
+                      videoId={video.video_id}
+                      className="video-thumbnail"
+                      baseThumbnail={video.thumbnail_path ?? undefined}
+                      resolveAssetUrl={resolveAssetUrl}
+                      limit={15}
+                    overlay={
+                      <>
+                        <span className="video-duration">{formatDuration(video.duration_ms)}</span>
+                        {video.status !== "DONE" && video.progress > 0 && (
+                          <div className="video-indexing-bar">
+                            <div
+                              className="video-indexing-fill"
+                              style={{ width: `${video.progress * 100}%` }}
+                            />
+                          </div>
+                        )}
+                      </>
+                    }
+                    placeholder={
+                      <div className="video-thumbnail-placeholder">
+                        <FilmIcon />
+                      </div>
+                    }
+                  />
+                  <div className="video-info">
+                    <div className="video-title">{video.filename}</div>
+                    <div className="video-meta">
+                      <span className={`video-status ${video.status === "DONE" ? "complete" : "indexing"}`}>
+                        {video.status === "DONE" ? (
+                          <>
+                            <CheckIcon />
+                            Indexed
+                          </>
+                        ) : (
+                          <>
+                            <LoaderIcon />
+                            {video.status}
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : selectedLibrary ? (
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <FilmIcon />
+              </div>
+              <h3>No photos or videos found</h3>
+              <p>This library doesn't contain any photos or videos yet, or scanning is in progress.</p>
+            </div>
+          ) : (
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <FolderIcon />
+              </div>
+              <h3>Select a library</h3>
+              <p>Choose a library from the sidebar or add a new folder to get started.</p>
+            </div>
+          )}
+        </div>
+
+        {(activeVideo || playerLoading || playerError) && (
+          <div className="player-overlay" onClick={closePlayer}>
+            <div className="player-panel" onClick={(e) => e.stopPropagation()}>
+              <div className="player-header">
+                <div className="player-title">
+                  {activeVideo?.filename ?? "Loading..."}
+                </div>
+                <button className="btn-icon" onClick={closePlayer} title="Close player">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+              <div className="player-body">
+                {playerLoading ? (
+                  <div className="player-loading">
+                    <div className="spinner spinner-large" />
+                    Loading video...
+                  </div>
+                ) : playerError ? (
+                  <div className="player-error">{playerError}</div>
+                ) : activeVideo ? (
+                  <video
+                    ref={videoRef}
+                    className="player-video"
+                    src={resolveVideoUrl(activeVideo.path)}
+                    controls
+                    autoPlay
+                    onLoadedMetadata={handlePlayerLoaded}
+                    onLoadedData={handlePlayerLoaded}
+                    onError={(e) => {
+                      const video = e.currentTarget;
+                      const error = video.error;
+                      console.error("Video error:", error?.code, error?.message);
+                      setPlayerError(`Failed to load video: ${error?.message || "Unknown error"}`);
+                    }}
+                  />
+                ) : null}
+              </div>
+              <div className="player-footer">
+                <div className="player-meta">
+                  Start {activeVideo ? formatTimestamp(activeVideo.timestamp_ms) : "--:--"}
+                </div>
+                <div className="player-meta">
+                  Duration {activeVideo?.duration_ms ? formatDuration(activeVideo.duration_ms) : "--:--"}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Status Panel */}
+        {showStatusPanel && (
+          <div className="player-overlay" onClick={() => setShowStatusPanel(false)}>
+            <div className="status-panel" onClick={(e) => e.stopPropagation()}>
+              <div className="status-panel-header">
+                <div className="status-panel-title">
+                  <ActivityIcon />
+                  Indexing Status
+                </div>
+                <button className="btn-icon" onClick={() => setShowStatusPanel(false)} title="Close">
+                  <CloseIcon />
+                </button>
+              </div>
+              <div className="status-panel-body">
+                {/* Summary Stats */}
+                <div className="status-summary">
+                  <div className="status-stat">
+                    <div className="status-stat-value">{videos.filter(v => v.status === "DONE").length}</div>
+                    <div className="status-stat-label">Indexed</div>
+                  </div>
+                  <div className="status-stat">
+                    <div className="status-stat-value">{videos.filter(v => v.status === "QUEUED").length}</div>
+                    <div className="status-stat-label">Queued</div>
+                  </div>
+                  <div className="status-stat">
+                    <div className="status-stat-value">
+                      {videos.filter(v => !["DONE", "QUEUED", "FAILED", "CANCELLED"].includes(v.status)).length}
+                    </div>
+                    <div className="status-stat-label">Processing</div>
+                  </div>
+                  <div className="status-stat">
+                    <div className="status-stat-value">{videos.filter(v => v.status === "FAILED").length}</div>
+                    <div className="status-stat-label">Failed</div>
+                  </div>
+                </div>
+
+                {/* Active Jobs */}
+                <div className="status-section">
+                  <div className="status-section-title">Active Jobs</div>
+                  {videos.filter(v => !["DONE", "QUEUED", "FAILED", "CANCELLED"].includes(v.status)).length === 0 ? (
+                    <div className="status-empty">No active indexing jobs</div>
+                  ) : (
+                    <div className="status-job-list">
+                      {videos
+                        .filter(v => !["DONE", "QUEUED", "FAILED", "CANCELLED"].includes(v.status))
+                        .map(video => {
+                          const job = jobProgress ? Array.from(jobProgress.values()).find(j => j.video_id === video.video_id) : null;
+                          return (
+                            <div key={video.video_id} className="status-job-item">
+                              <div className="status-job-info">
+                                <div className="status-job-name">{video.filename}</div>
+                                <div className="status-job-stage">
+                                  {job?.stage || video.status}
+                                  {job?.message && <span> - {job.message}</span>}
+                                </div>
+                              </div>
+                              <div className="status-job-progress">
+                                <div className="progress-bar" style={{ height: 6 }}>
+                                  <div
+                                    className="progress-fill"
+                                    style={{ width: `${(job?.progress ?? video.progress) * 100}%` }}
+                                  />
+                                </div>
+                                <div className="status-job-percent">
+                                  {Math.round((job?.progress ?? video.progress) * 100)}%
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Queued Videos */}
+                <div className="status-section">
+                <div className="status-section-title">Queued Items ({videos.filter(v => v.status === "QUEUED").length})</div>
+                {videos.filter(v => v.status === "QUEUED").length === 0 ? (
+                    <div className="status-empty">No items in queue</div>
+                ) : (
+                    <div className="status-queue-list">
+                      {videos
+                        .filter(v => v.status === "QUEUED")
+                        .slice(0, 10)
+                        .map(video => (
+                          <div key={video.video_id} className="status-queue-item">
+                            <FilmIcon />
+                            <span>{video.filename}</span>
+                          </div>
+                        ))}
+                      {videos.filter(v => v.status === "QUEUED").length > 10 && (
+                        <div className="status-queue-more">
+                          +{videos.filter(v => v.status === "QUEUED").length - 10} more
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Failed Videos */}
+                {videos.filter(v => v.status === "FAILED").length > 0 && (
+                  <div className="status-section">
+                    <div className="status-section-title status-failed">
+                      <AlertCircleIcon />
+                      Failed Items ({videos.filter(v => v.status === "FAILED").length})
+                    </div>
+                    <div className="status-failed-list">
+                      {videos
+                        .filter(v => v.status === "FAILED")
+                        .slice(0, 10)
+                        .map(video => (
+                          <div key={video.video_id} className="status-failed-item">
+                            <div className="status-failed-header">
+                              <div className="status-failed-name">
+                                <FilmIcon />
+                                <span>{video.filename}</span>
+                              </div>
+                              <button
+                                className="btn-icon retry-btn"
+                                onClick={() => handleRetryVideo(video.video_id)}
+                                title="Retry indexing"
+                              >
+                                <RetryIcon />
+                              </button>
+                            </div>
+                            {video.error_message && (
+                              <div className="status-failed-error">
+                                <span className="error-code">{video.error_code || "ERROR"}</span>
+                                <span className="error-message">{video.error_message}</span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      {videos.filter(v => v.status === "FAILED").length > 10 && (
+                        <div className="status-queue-more">
+                          +{videos.filter(v => v.status === "FAILED").length - 10} more
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

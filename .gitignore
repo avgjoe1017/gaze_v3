@@ -1,0 +1,66 @@
+# Test library with downloaded videos
+test-library/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.npm
+
+# Tauri
+app/src-tauri/target/
+app/src-tauri/Cargo.lock
+
+# Engine artifacts
+engine/dist/
+engine/build/
+*.spec.bak
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+expo.log
+server.log
+
+# Database (local dev)
+*.db
+*.db-shm
+*.db-wal
+
+# Models directory (large files)
+models/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# OS
+Thumbs.db
+.DS_Store
+nul
