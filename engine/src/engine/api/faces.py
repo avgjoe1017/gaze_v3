@@ -1,5 +1,6 @@
 """Face management endpoints."""
 
+import json
 import uuid
 from datetime import datetime
 from typing import Literal, Optional
@@ -23,7 +24,34 @@ from ..utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/faces", tags=["faces"])
+async def verify_face_recognition_enabled(_token: str = Depends(verify_token)) -> None:
+    """Ensure face recognition is enabled before accessing faces endpoints."""
+    async for db in get_db():
+        cursor = await db.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            ("face_recognition_enabled",),
+        )
+        row = await cursor.fetchone()
+        if row:
+            try:
+                enabled = bool(json.loads(row["value"]))
+            except Exception:
+                enabled = str(row["value"]).lower() == "true"
+        else:
+            enabled = False
+
+    if not enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="Face recognition is disabled. Enable it in Settings to use Faces.",
+        )
+
+
+router = APIRouter(
+    prefix="/faces",
+    tags=["faces"],
+    dependencies=[Depends(verify_face_recognition_enabled)],
+)
 
 
 # =============================================================================

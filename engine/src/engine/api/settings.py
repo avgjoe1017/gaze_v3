@@ -26,6 +26,8 @@ DEFAULT_SETTINGS = {
     "transcription_min_silence_ms": 500,
     "transcription_silence_threshold_db": -35,
     "transcription_chunk_seconds": 30.0,
+    "offline_mode": False,
+    "face_recognition_enabled": False,
 }
 
 
@@ -42,6 +44,8 @@ class Settings(BaseModel):
     transcription_min_silence_ms: int = 500
     transcription_silence_threshold_db: int = -35
     transcription_chunk_seconds: float | None = 30.0
+    offline_mode: bool = False
+    face_recognition_enabled: bool = False
 
 
 class SettingsUpdate(BaseModel):
@@ -57,6 +61,8 @@ class SettingsUpdate(BaseModel):
     transcription_min_silence_ms: int | None = None
     transcription_silence_threshold_db: int | None = None
     transcription_chunk_seconds: float | None = None
+    offline_mode: bool | None = None
+    face_recognition_enabled: bool | None = None
 
 
 @router.get("", response_model=Settings)

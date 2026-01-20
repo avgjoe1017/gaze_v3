@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 from pathlib import Path
 from typing import Literal
 
@@ -9,7 +10,9 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
+from ..db.connection import get_db
 from ..middleware.auth import verify_token
+from ..core.network import log_outbound_request
 from ..utils.logging import get_logger
 from ..utils.paths import get_models_dir
 from ..ws.handler import emit_model_download_progress, emit_model_download_complete, emit_model_download_error
@@ -44,6 +47,22 @@ MODEL_INFO = {
 # Track active downloads and their progress
 _active_downloads: dict[str, float] = {}
 _download_errors: dict[str, str] = {}
+
+
+async def is_offline_mode() -> bool:
+    """Return True if offline mode is enabled in settings."""
+    async for db in get_db():
+        cursor = await db.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            ("offline_mode",),
+        )
+        row = await cursor.fetchone()
+        if row:
+            try:
+                return bool(json.loads(row["value"]))
+            except Exception:
+                return str(row["value"]).lower() == "true"
+    return False
 
 
 class ModelInfoResponse(BaseModel):
@@ -100,6 +119,13 @@ async def download_model_task(model_name: str, max_retries: int = 3) -> None:
             await asyncio.sleep(delay)
 
         logger.info(f"Starting download of {model_name} from {info['url']} (attempt {attempt + 1})")
+        log_outbound_request(
+            kind="model_download",
+            url=info["url"],
+            model=model_name,
+            status="started",
+            attempt=attempt + 1,
+        )
 
         try:
             # Check for partial download to resume
@@ -179,6 +205,13 @@ async def download_model_task(model_name: str, max_retries: int = 3) -> None:
 
             # Emit completion
             await emit_model_download_complete(model_name)
+            log_outbound_request(
+                kind="model_download",
+                url=info["url"],
+                model=model_name,
+                status="completed",
+                attempt=attempt + 1,
+            )
 
             # Clear any previous error
             _download_errors.pop(model_name, None)
@@ -187,6 +220,14 @@ async def download_model_task(model_name: str, max_retries: int = 3) -> None:
         except Exception as e:
             last_error = e
             logger.warning(f"Download attempt {attempt + 1} failed for {model_name}: {e}")
+            log_outbound_request(
+                kind="model_download",
+                url=info["url"],
+                model=model_name,
+                status="failed",
+                attempt=attempt + 1,
+                error=str(e),
+            )
 
     # All retries exhausted
     error_msg = f"Failed after {max_retries} attempts: {last_error}"
@@ -253,6 +294,12 @@ async def download_model(
     # Check if already downloading
     if model_name in _active_downloads:
         return DownloadModelResponse(status="downloading")
+
+    if await is_offline_mode():
+        return DownloadModelResponse(
+            status="error",
+            error="Offline mode is enabled. Disable it in settings to download models.",
+        )
 
     # Start download in background
     logger.info(f"Starting background download of {model_name}")

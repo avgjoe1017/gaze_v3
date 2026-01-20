@@ -15,6 +15,7 @@ _db_connection: aiosqlite.Connection | None = None
 # Columns added after initial schema (for migration)
 MIGRATION_COLUMNS = {
     "videos": [
+        ("media_type", "TEXT DEFAULT 'video'"),
         ("fps", "REAL"),
         ("video_codec", "TEXT"),
         ("video_bitrate", "INTEGER"),
@@ -61,6 +62,7 @@ async def init_database(path: Path) -> None:
     logger.info(f"Initializing database at {path}")
 
     async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row
         # Enable WAL mode and other pragmas
         await db.execute("PRAGMA foreign_keys = ON")
         await db.execute("PRAGMA journal_mode = WAL")
@@ -75,6 +77,9 @@ async def init_database(path: Path) -> None:
 
         # Create indexes after migrations (safe now that columns exist)
         await db.executescript(SCHEMA_INDEXES)
+
+        # Backfill media table for existing videos (safe on first run too)
+        await _backfill_media_from_videos(db)
 
         await db.commit()
 
@@ -107,6 +112,7 @@ CREATE TABLE IF NOT EXISTS videos (
     library_id TEXT NOT NULL,
     path TEXT NOT NULL,
     filename TEXT NOT NULL,
+    media_type TEXT NOT NULL DEFAULT 'video',
     file_size INTEGER NOT NULL,
     mtime_ms INTEGER NOT NULL,
     fingerprint TEXT NOT NULL,
@@ -139,6 +145,45 @@ CREATE TABLE IF NOT EXISTS videos (
     created_at_ms INTEGER NOT NULL,
     UNIQUE(library_id, path),
     FOREIGN KEY(library_id) REFERENCES libraries(library_id) ON DELETE CASCADE
+);
+
+-- Unified media table (photos + videos)
+CREATE TABLE IF NOT EXISTS media (
+    media_id TEXT PRIMARY KEY,
+    library_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    file_ext TEXT,
+    media_type TEXT NOT NULL, -- 'video' or 'photo'
+    file_size INTEGER NOT NULL,
+    mtime_ms INTEGER NOT NULL,
+    fingerprint TEXT NOT NULL,
+    duration_ms INTEGER,
+    width INTEGER,
+    height INTEGER,
+    creation_time TEXT,
+    camera_make TEXT,
+    camera_model TEXT,
+    gps_lat REAL,
+    gps_lng REAL,
+    status TEXT NOT NULL DEFAULT 'QUEUED',
+    progress REAL NOT NULL DEFAULT 0.0,
+    error_code TEXT,
+    error_message TEXT,
+    indexed_at_ms INTEGER,
+    created_at_ms INTEGER NOT NULL,
+    UNIQUE(library_id, path),
+    FOREIGN KEY(library_id) REFERENCES libraries(library_id) ON DELETE CASCADE
+);
+
+-- Flexible key-value metadata for media
+CREATE TABLE IF NOT EXISTS media_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT,
+    UNIQUE(media_id, key),
+    FOREIGN KEY(media_id) REFERENCES media(media_id) ON DELETE CASCADE
 );
 
 -- Flexible key-value metadata for additional/custom fields
@@ -257,6 +302,7 @@ CREATE TABLE IF NOT EXISTS faces (
 SCHEMA_INDEXES = """
 -- Indexes (run after migrations to ensure columns exist)
 CREATE INDEX IF NOT EXISTS idx_videos_library ON videos(library_id);
+CREATE INDEX IF NOT EXISTS idx_videos_media_type ON videos(media_type);
 CREATE INDEX IF NOT EXISTS idx_videos_fingerprint ON videos(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_videos_status ON videos(status);
 CREATE INDEX IF NOT EXISTS idx_videos_creation_time ON videos(creation_time);
@@ -277,4 +323,63 @@ CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);
 CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_faces_timestamp ON faces(video_id, timestamp_ms);
 CREATE INDEX IF NOT EXISTS idx_persons_name ON persons(name);
+-- Media indexes
+CREATE INDEX IF NOT EXISTS idx_media_library ON media(library_id);
+CREATE INDEX IF NOT EXISTS idx_media_type ON media(media_type);
+CREATE INDEX IF NOT EXISTS idx_media_fingerprint ON media(fingerprint);
+CREATE INDEX IF NOT EXISTS idx_media_creation_time ON media(creation_time);
+CREATE INDEX IF NOT EXISTS idx_media_metadata ON media_metadata(media_id, key);
 """
+
+
+async def _backfill_media_from_videos(db: aiosqlite.Connection) -> None:
+    """Ensure media table has entries for existing videos."""
+    cursor = await db.execute(
+        """
+        SELECT video_id, library_id, path, filename, media_type, file_size, mtime_ms, fingerprint,
+               duration_ms, width, height, creation_time, camera_make, camera_model,
+               gps_lat, gps_lng, status, progress, error_code, error_message,
+               indexed_at_ms, created_at_ms
+        FROM videos
+        """
+    )
+    rows = await cursor.fetchall()
+    for row in rows:
+        path = row["path"]
+        file_ext = Path(path).suffix.lower() if path else None
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO media (
+                media_id, library_id, path, filename, file_ext, media_type,
+                file_size, mtime_ms, fingerprint, duration_ms, width, height,
+                creation_time, camera_make, camera_model, gps_lat, gps_lng,
+                status, progress, error_code, error_message, indexed_at_ms, created_at_ms
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["video_id"],
+                row["library_id"],
+                row["path"],
+                row["filename"],
+                file_ext,
+                row["media_type"] or "video",
+                row["file_size"],
+                row["mtime_ms"],
+                row["fingerprint"],
+                row["duration_ms"],
+                row["width"],
+                row["height"],
+                row["creation_time"],
+                row["camera_make"],
+                row["camera_model"],
+                row["gps_lat"],
+                row["gps_lng"],
+                row["status"],
+                row["progress"],
+                row["error_code"],
+                row["error_message"],
+                row["indexed_at_ms"],
+                row["created_at_ms"],
+            ),
+        )

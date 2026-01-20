@@ -14,7 +14,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import health, models, libraries, videos, search, jobs, settings, logs, stats, assets, faces
+from .api import health, models, libraries, videos, media, search, jobs, settings, logs, stats, assets, faces, backup, network
 from .ws.handler import websocket_handler
 from .core.lifecycle import LifecycleManager, repair_consistency
 from .core.indexer import auto_continue_indexing
@@ -86,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(models.router)
     app.include_router(libraries.router)
     app.include_router(videos.router)
+    app.include_router(media.router)
     app.include_router(search.router)
     app.include_router(jobs.router)
     app.include_router(settings.router)
@@ -93,6 +94,8 @@ def create_app() -> FastAPI:
     app.include_router(stats.router)
     app.include_router(assets.router)
     app.include_router(faces.router)
+    app.include_router(backup.router)
+    app.include_router(network.router)
 
     # WebSocket endpoint
     @app.websocket("/ws")

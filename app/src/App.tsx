@@ -6,6 +6,9 @@ import { MainView } from "./components/MainView";
 import { LogViewer } from "./components/LogViewer";
 import { Analytics } from "./components/Analytics";
 import { Faces } from "./components/Faces";
+import { SettingsView } from "./components/SettingsView";
+import { PrivacyView } from "./components/PrivacyView";
+import { apiRequest } from "./lib/apiClient";
 
 // Icons
 const EyeIcon = () => (
@@ -35,6 +38,21 @@ const MoonIcon = () => (
   </svg>
 );
 
+interface SettingsData {
+  max_concurrent_jobs: number;
+  thumbnail_quality: number;
+  frame_interval_seconds: number;
+  transcription_model: string;
+  transcription_language: string | null;
+  transcription_backend: string;
+  transcription_vad_enabled: boolean;
+  transcription_min_silence_ms: number;
+  transcription_silence_threshold_db: number;
+  transcription_chunk_seconds: number | null;
+  offline_mode: boolean;
+  face_recognition_enabled: boolean;
+}
+
 function App() {
   const { status, health, error, port, startEngine } = useEngine();
   const { connected: wsConnected, addHandler } = useWebSocket({ port, enabled: status === "connected" });
@@ -44,6 +62,10 @@ function App() {
   const [showLogs, setShowLogs] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [showFaces, setShowFaces] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
+  const [settings, setSettings] = useState<SettingsData | null>(null);
+  const [settingsLoading, setSettingsLoading] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     if (typeof window === "undefined") return "light";
     const stored = window.localStorage.getItem("gaze-theme");
@@ -62,6 +84,39 @@ function App() {
     window.localStorage.setItem("gaze-theme", theme);
   }, [theme]);
 
+  const fetchSettings = async () => {
+    if (status !== "connected") return;
+    setSettingsLoading(true);
+    try {
+      const data = await apiRequest<SettingsData>("/settings");
+      setSettings(data);
+    } catch (err) {
+      console.error("[Settings] Failed to load:", err);
+      setSettings(null);
+    } finally {
+      setSettingsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (status === "connected") {
+      fetchSettings();
+    } else {
+      setSettings(null);
+    }
+  }, [status]);
+
+  const updateSettings = async (update: Partial<SettingsData>) => {
+    const data = await apiRequest<SettingsData>("/settings", {
+      method: "PATCH",
+      body: JSON.stringify(update),
+    });
+    setSettings(data);
+  };
+
+  const faceRecognitionEnabled = settings?.face_recognition_enabled ?? false;
+  const offlineMode = settings?.offline_mode ?? false;
+
   return (
     <div className="app">
       <header className="header">
@@ -77,12 +132,21 @@ function App() {
             <>
               <button
                 onClick={() => {
+                  if (!faceRecognitionEnabled) {
+                    setShowSettings(true);
+                    setShowFaces(false);
+                    setShowAnalytics(false);
+                    setShowLogs(false);
+                    return;
+                  }
                   setShowFaces(!showFaces);
                   setShowAnalytics(false);
                   setShowLogs(false);
+                  setShowSettings(false);
+                  setShowPrivacy(false);
                 }}
-                className={`btn-pill ${showFaces ? "active" : ""}`}
-                title="Toggle face recognition"
+                className={`btn-pill ${showFaces ? "active" : ""} ${faceRecognitionEnabled ? "" : "disabled"}`}
+                title={faceRecognitionEnabled ? "Toggle face recognition" : "Enable face recognition in Settings"}
                 style={{
                   padding: "6px 12px",
                   fontSize: 12,
@@ -104,6 +168,8 @@ function App() {
                   setShowAnalytics(!showAnalytics);
                   setShowLogs(false);
                   setShowFaces(false);
+                  setShowSettings(false);
+                  setShowPrivacy(false);
                 }}
                 className={`btn-pill ${showAnalytics ? "active" : ""}`}
                 title="Toggle analytics dashboard"
@@ -127,6 +193,8 @@ function App() {
                   setShowLogs(!showLogs);
                   setShowAnalytics(false);
                   setShowFaces(false);
+                  setShowSettings(false);
+                  setShowPrivacy(false);
                 }}
                 className={`btn-pill ${showLogs ? "active" : ""}`}
                 title="Toggle logs viewer"
@@ -143,6 +211,53 @@ function App() {
                   <line x1="12" y1="19" x2="20" y2="19" />
                 </svg>
                 Logs
+              </button>
+              <button
+                onClick={() => {
+                  setShowSettings(!showSettings);
+                  setShowLogs(false);
+                  setShowAnalytics(false);
+                  setShowFaces(false);
+                  setShowPrivacy(false);
+                }}
+                className={`btn-pill ${showSettings ? "active" : ""}`}
+                title="Open settings"
+                style={{
+                  padding: "6px 12px",
+                  fontSize: 12,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.7 1.7 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.82-.33 1.7 1.7 0 0 0-1 1.54V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.54 1.7 1.7 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.54-1H3a2 2 0 1 1 0-4h.06a1.7 1.7 0 0 0 1.54-1 1.7 1.7 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 8 4.6a1.7 1.7 0 0 0 1-1.54V3a2 2 0 1 1 4 0v.06a1.7 1.7 0 0 0 1 1.54 1.7 1.7 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.33 1.82 1.7 1.7 0 0 0 1.54 1H21a2 2 0 1 1 0 4h-.06a1.7 1.7 0 0 0-1.54 1z" />
+                </svg>
+                Settings
+              </button>
+              <button
+                onClick={() => {
+                  setShowPrivacy(!showPrivacy);
+                  setShowLogs(false);
+                  setShowAnalytics(false);
+                  setShowFaces(false);
+                  setShowSettings(false);
+                }}
+                className={`btn-pill ${showPrivacy ? "active" : ""}`}
+                title="Privacy and networking status"
+                style={{
+                  padding: "6px 12px",
+                  fontSize: 12,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 3l7 4v5c0 5-3.5 8-7 9-3.5-1-7-4-7-9V7l7-4z" />
+                </svg>
+                Privacy
               </button>
             </>
           )}
@@ -191,7 +306,7 @@ function App() {
           </div>
         )}
 
-        {status === "connected" && health && health.status === "error" && health.dependencies && (
+        {status === "connected" && health && health.status === "error" && health.dependencies && !showPrivacy && (
           !health.dependencies.ffmpeg_available || !health.dependencies.ffprobe_available
         ) && (
           <div className="center-panel">
@@ -284,18 +399,38 @@ function App() {
           </div>
         )}
 
-        {status === "connected" && health && !health.models_ready && health.status !== "error" && (
+        {status === "connected" && health && !health.models_ready && health.status !== "error" && !showSettings && !showPrivacy && (
           <div className="center-panel">
             <h2>Setup Required</h2>
             <p>
               Before searching your photos and videos, download the required ML models.
               These run locally on your machine for complete privacy.
             </p>
-            <ModelDownload missingModels={health.missing_models} wsDownloads={modelDownloads} />
+            <ModelDownload
+              missingModels={health.missing_models}
+              wsDownloads={modelDownloads}
+              offlineMode={offlineMode}
+            />
           </div>
         )}
 
-        {status === "connected" && health?.models_ready && (
+        {status === "connected" && showSettings && (
+          <SettingsView
+            settings={settings}
+            loading={settingsLoading}
+            onRefresh={fetchSettings}
+            onUpdate={updateSettings}
+          />
+        )}
+
+        {status === "connected" && showPrivacy && (
+          <PrivacyView
+            offlineMode={offlineMode}
+            onUpdate={(update) => updateSettings(update)}
+          />
+        )}
+
+        {status === "connected" && health?.models_ready && !showSettings && !showPrivacy && (
           <>
             {showLogs ? (
               <LogViewer port={port!} />
@@ -304,7 +439,11 @@ function App() {
             ) : showFaces ? (
               <Faces />
             ) : (
-              <MainView scanProgress={scanProgress} jobProgress={jobProgress} />
+              <MainView
+                scanProgress={scanProgress}
+                jobProgress={jobProgress}
+                faceRecognitionEnabled={faceRecognitionEnabled}
+              />
             )}
           </>
         )}
@@ -321,9 +460,9 @@ function StatusBadge({
   wsConnected: boolean;
 }) {
   const labels = {
-    connected: "Online",
-    disconnected: "Offline",
-    starting: "Starting",
+    connected: "Engine Running",
+    disconnected: "Engine Offline",
+    starting: "Engine Starting",
   };
 
   return (
@@ -335,7 +474,7 @@ function StatusBadge({
       {status === "connected" && (
         <div className={`status-badge ${wsConnected ? "ws-connected" : "ws-disconnected"}`}>
           <span className="status-dot" />
-          WS {wsConnected ? "Live" : "..."}
+          {wsConnected ? "Local Live" : "Local Link"}
         </div>
       )}
     </div>

@@ -155,6 +155,33 @@ interface Video {
   error_message?: string;
 }
 
+interface MediaItem {
+  media_id: string;
+  library_id: string;
+  path: string;
+  filename: string;
+  file_ext?: string | null;
+  media_type: "video" | "photo";
+  file_size: number;
+  mtime_ms: number;
+  fingerprint: string;
+  duration_ms?: number | null;
+  width?: number | null;
+  height?: number | null;
+  creation_time?: string | null;
+  camera_make?: string | null;
+  camera_model?: string | null;
+  gps_lat?: number | null;
+  gps_lng?: number | null;
+  status: string;
+  progress: number;
+  error_code?: string | null;
+  error_message?: string | null;
+  indexed_at_ms?: number | null;
+  created_at_ms: number;
+  thumbnail_path?: string | null;
+}
+
 interface VideoDetails {
   video_id: string;
   filename: string;
@@ -235,6 +262,7 @@ interface GroupedSearchResult {
 interface MainViewProps {
   scanProgress?: Map<string, ScanProgressEvent>;
   jobProgress?: Map<string, JobProgressEvent>;
+  faceRecognitionEnabled?: boolean;
 }
 
 interface HoverPreviewProps {
@@ -335,16 +363,22 @@ const HoverPreview = ({
   );
 };
 
-export function MainView({ scanProgress, jobProgress }: MainViewProps) {
+export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = false }: MainViewProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMode, setSearchMode] = useState<SearchMode>("all");
   const [libraries, setLibraries] = useState<Library[]>([]);
   const [selectedLibrary, setSelectedLibrary] = useState<string | null>(null);
   const [videos, setVideos] = useState<Video[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
+  const [mediaLoading, setMediaLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [mediaTypeFilter, setMediaTypeFilter] = useState<"all" | "photo" | "video">("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [locationOnly, setLocationOnly] = useState(false);
+  const [activePhoto, setActivePhoto] = useState<MediaItem | null>(null);
   const [indexingStarting, setIndexingStarting] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [showStatusPanel, setShowStatusPanel] = useState(false);
@@ -375,11 +409,20 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
   }, [showPersonPicker]);
 
 
-  // Fetch libraries and persons on mount
+  // Fetch libraries on mount
   useEffect(() => {
     fetchLibraries();
-    fetchPersons();
   }, []);
+
+  // Fetch persons when face recognition is enabled
+  useEffect(() => {
+    if (!faceRecognitionEnabled) {
+      setPersons([]);
+      setSelectedPersons([]);
+      return;
+    }
+    fetchPersons();
+  }, [faceRecognitionEnabled]);
 
   const fetchPersons = async () => {
     try {
@@ -387,6 +430,10 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
       const data = await apiRequest<{ persons: Person[] }>("/faces/persons");
       setPersons(data.persons || []);
     } catch (err) {
+      setPersons([]);
+      if (err instanceof Error && err.message.includes("403")) {
+        return;
+      }
       console.error("Failed to fetch persons:", err);
     }
   };
@@ -411,12 +458,13 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
     };
   }, []);
 
-  // Fetch videos when library changes (only if not searching)
+  // Fetch media + videos when library changes (only if not searching)
   useEffect(() => {
     if (selectedLibrary && !isSearching) {
       fetchVideos(selectedLibrary);
+      fetchMedia(selectedLibrary);
     }
-  }, [selectedLibrary, isSearching]);
+  }, [selectedLibrary, isSearching, mediaTypeFilter, dateFrom, dateTo, locationOnly]);
 
   // Refresh libraries and videos when scan completes
   useEffect(() => {
@@ -430,6 +478,7 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
           selectedLibrary === ALL_LIBRARIES_ID
         ) {
           fetchVideos(selectedLibrary);
+          fetchMedia(selectedLibrary);
         }
       }
     });
@@ -500,7 +549,6 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
   };
 
   const fetchVideos = async (libraryId: string) => {
-    setLoading(true);
     try {
       const { apiRequest } = await import("../lib/apiClient");
       const endpoint =
@@ -511,8 +559,36 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
       setVideos(data.videos || []);
     } catch (err) {
       console.error("Failed to fetch videos:", err);
+    }
+  };
+
+  const fetchMedia = async (libraryId: string) => {
+    setMediaLoading(true);
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      const params = new URLSearchParams();
+      if (libraryId !== ALL_LIBRARIES_ID) {
+        params.set("library_id", libraryId);
+      }
+      if (mediaTypeFilter !== "all") {
+        params.set("media_type", mediaTypeFilter);
+      }
+      if (dateFrom) {
+        params.set("date_from", dateFrom);
+      }
+      if (dateTo) {
+        params.set("date_to", dateTo);
+      }
+      if (locationOnly) {
+        params.set("location_only", "true");
+      }
+      const endpoint = params.toString() ? `/media?${params.toString()}` : "/media";
+      const data = await apiRequest<{ media: MediaItem[]; total: number }>(endpoint);
+      setMediaItems(data.media || []);
+    } catch (err) {
+      console.error("Failed to fetch media:", err);
     } finally {
-      setLoading(false);
+      setMediaLoading(false);
     }
   };
 
@@ -545,6 +621,7 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
       // Refresh videos to show status updates
       if (selectedLibrary) {
         setTimeout(() => fetchVideos(selectedLibrary), 1000);
+        setTimeout(() => fetchMedia(selectedLibrary), 1000);
       }
     } catch (err) {
       console.error("Failed to start indexing:", err);
@@ -561,6 +638,7 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
       // Refresh videos list
       if (selectedLibrary) {
         fetchVideos(selectedLibrary);
+        fetchMedia(selectedLibrary);
       }
     } catch (err) {
       console.error("Failed to retry video:", err);
@@ -614,6 +692,7 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
       setIsSearching(false);
       if (selectedLibrary) {
         fetchVideos(selectedLibrary);
+        fetchMedia(selectedLibrary);
       }
       return;
     }
@@ -692,6 +771,26 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   };
 
+  const formatPhotoDate = (creationTime?: string | null, fallbackMs?: number | null) => {
+    if (creationTime) {
+      const normalized = creationTime.replace(/^(\d{4}):(\d{2}):(\d{2})/, "$1-$2-$3");
+      const parsed = new Date(normalized);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+      }
+    }
+    if (fallbackMs) {
+      const parsed = new Date(fallbackMs);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+      }
+    }
+    return "Unknown date";
+  };
+
+  const filtersActive =
+    mediaTypeFilter !== "all" || locationOnly || Boolean(dateFrom) || Boolean(dateTo);
+
   const formatTimestamp = (ms: number) => {
     const totalSeconds = Math.floor(ms / 1000);
     const hours = Math.floor(totalSeconds / 3600);
@@ -722,6 +821,20 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
         return "";
       }
       return `${apiBaseUrl}/assets/thumbnail?path=${encodeURIComponent(path)}`;
+    },
+    [apiBaseUrl]
+  );
+
+  const resolveMediaUrl = useCallback(
+    (path?: string | null) => {
+      if (!path) return "";
+      if (isTauri) {
+        return convertFileSrc(path);
+      }
+      if (!apiBaseUrl) {
+        return "";
+      }
+      return `${apiBaseUrl}/assets/media?path=${encodeURIComponent(path)}`;
     },
     [apiBaseUrl]
   );
@@ -860,7 +973,7 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
                     <div className="library-meta">
                       {isScanning
                         ? `Scanning... ${scan?.files_found || 0} files found`
-                        : `${lib.indexed_count}/${lib.video_count} indexed`
+                        : `${lib.indexed_count}/${lib.video_count} indexed items`
                       }
                     </div>
                   </div>
@@ -1019,7 +1132,7 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
             </button>
 
             {/* Person filter */}
-            {persons.length > 0 && (
+            {faceRecognitionEnabled && persons.length > 0 && (
               <div className="person-filter-container" ref={personPickerRef}>
                 <button
                   className={`chip ${selectedPersons.length > 0 ? "active" : ""}`}
@@ -1077,6 +1190,50 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
                 )}
               </div>
             )}
+            <div className="chip-group">
+              <button
+                className={`chip ${mediaTypeFilter === "all" ? "active" : ""}`}
+                onClick={() => setMediaTypeFilter("all")}
+                type="button"
+              >
+                Everything
+              </button>
+              <button
+                className={`chip ${mediaTypeFilter === "photo" ? "active" : ""}`}
+                onClick={() => setMediaTypeFilter("photo")}
+                type="button"
+              >
+                <ImageIcon />
+                Photos
+              </button>
+              <button
+                className={`chip ${mediaTypeFilter === "video" ? "active" : ""}`}
+                onClick={() => setMediaTypeFilter("video")}
+                type="button"
+              >
+                <FilmIcon />
+                Videos
+              </button>
+            </div>
+          </div>
+          <div className="media-filters">
+            <div className="date-filter">
+              <label>
+                From
+                <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+              </label>
+              <label>
+                To
+                <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+              </label>
+            </div>
+            <button
+              className={`chip ${locationOnly ? "active" : ""}`}
+              onClick={() => setLocationOnly(!locationOnly)}
+              type="button"
+            >
+              Location tagged
+            </button>
           </div>
         </div>
 
@@ -1245,64 +1402,116 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
                 <p>Try adjusting your search query or filters.</p>
               </div>
             )
-          ) : loading ? (
+          ) : mediaLoading ? (
             <div className="empty-state">
               <div className="spinner spinner-large" />
               <p>Loading your library...</p>
             </div>
-          ) : videos.length > 0 ? (
+          ) : mediaItems.length > 0 ? (
             <div className="video-grid">
-              {videos.map((video) => (
-                <div
-                  key={video.video_id}
-                  className="video-card"
-                  onClick={() => openPlayer(video.video_id, 0)}
-                >
-                    <HoverPreview
-                      videoId={video.video_id}
-                      className="video-thumbnail"
-                      baseThumbnail={video.thumbnail_path ?? undefined}
-                      resolveAssetUrl={resolveAssetUrl}
-                      limit={15}
-                    overlay={
-                      <>
-                        <span className="video-duration">{formatDuration(video.duration_ms)}</span>
-                        {video.status !== "DONE" && video.progress > 0 && (
-                          <div className="video-indexing-bar">
-                            <div
-                              className="video-indexing-fill"
-                              style={{ width: `${video.progress * 100}%` }}
-                            />
+              {mediaItems.map((item) => {
+                const isVideo = item.media_type === "video";
+                const video = isVideo ? videos.find((v) => v.video_id === item.media_id) : null;
+                const status = video?.status ?? item.status;
+                const progress = video?.progress ?? item.progress;
+                const duration = video?.duration_ms ?? item.duration_ms ?? undefined;
+                const photoDate = formatPhotoDate(item.creation_time, item.mtime_ms);
+                const dimensions = item.width && item.height ? `${item.width}×${item.height}` : "—";
+                const camera = item.camera_make || item.camera_model
+                  ? [item.camera_make, item.camera_model].filter(Boolean).join(" ")
+                  : null;
+                return (
+                  <div
+                    key={item.media_id}
+                    className={`video-card media-card ${isVideo ? "is-video" : "is-photo"}`}
+                    onClick={
+                      isVideo
+                        ? () => openPlayer(item.media_id, 0)
+                        : () => setActivePhoto(item)
+                    }
+                  >
+                    {isVideo ? (
+                      <HoverPreview
+                        videoId={item.media_id}
+                        className="video-thumbnail"
+                        baseThumbnail={item.thumbnail_path ?? undefined}
+                        resolveAssetUrl={resolveAssetUrl}
+                        limit={15}
+                        overlay={
+                          <>
+                            <span className="video-duration">{formatDuration(duration)}</span>
+                            {status !== "DONE" && progress > 0 && (
+                              <div className="video-indexing-bar">
+                                <div
+                                  className="video-indexing-fill"
+                                  style={{ width: `${progress * 100}%` }}
+                                />
+                              </div>
+                            )}
+                          </>
+                        }
+                        placeholder={
+                          <div className="video-thumbnail-placeholder">
+                            <FilmIcon />
+                          </div>
+                        }
+                      />
+                    ) : (
+                      <div className="video-thumbnail photo-thumbnail">
+                        {item.path ? (
+                          <img src={resolveMediaUrl(item.path)} alt="" loading="lazy" />
+                        ) : (
+                          <div className="video-thumbnail-placeholder">
+                            <ImageIcon />
                           </div>
                         )}
-                      </>
-                    }
-                    placeholder={
-                      <div className="video-thumbnail-placeholder">
-                        <FilmIcon />
+                        <span className="media-type-badge">Photo</span>
                       </div>
-                    }
-                  />
-                  <div className="video-info">
-                    <div className="video-title">{video.filename}</div>
-                    <div className="video-meta">
-                      <span className={`video-status ${video.status === "DONE" ? "complete" : "indexing"}`}>
-                        {video.status === "DONE" ? (
-                          <>
-                            <CheckIcon />
-                            Indexed
-                          </>
+                    )}
+                    <div className="video-info">
+                      <div className="video-title">{item.filename}</div>
+                      {!isVideo && (
+                        <div className="media-meta">
+                          <span>{photoDate}</span>
+                          <span>{dimensions}</span>
+                          {camera && <span>{camera}</span>}
+                          {item.gps_lat != null && item.gps_lng != null && <span>GPS</span>}
+                        </div>
+                      )}
+                      <div className="video-meta">
+                        {isVideo ? (
+                          <span className={`video-status ${status === "DONE" ? "complete" : "indexing"}`}>
+                            {status === "DONE" ? (
+                              <>
+                                <CheckIcon />
+                                Indexed
+                              </>
+                            ) : (
+                              <>
+                                <LoaderIcon />
+                                {status}
+                              </>
+                            )}
+                          </span>
                         ) : (
-                          <>
-                            <LoaderIcon />
-                            {video.status}
-                          </>
+                          <span className="video-status complete">
+                            <ImageIcon />
+                            Photo
+                          </span>
                         )}
-                      </span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
+            </div>
+          ) : filtersActive ? (
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <ImageIcon />
+              </div>
+              <h3>No items match these filters</h3>
+              <p>Try adjusting media type, date range, or location filters.</p>
             </div>
           ) : selectedLibrary ? (
             <div className="empty-state">
@@ -1369,6 +1578,40 @@ export function MainView({ scanProgress, jobProgress }: MainViewProps) {
                 </div>
                 <div className="player-meta">
                   Duration {activeVideo?.duration_ms ? formatDuration(activeVideo.duration_ms) : "--:--"}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activePhoto && (
+          <div className="photo-overlay" onClick={() => setActivePhoto(null)}>
+            <div className="photo-panel" onClick={(e) => e.stopPropagation()}>
+              <div className="photo-header">
+                <div className="photo-title">{activePhoto.filename}</div>
+                <button className="btn-icon" onClick={() => setActivePhoto(null)} title="Close photo">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+              <div className="photo-body">
+                <img src={resolveMediaUrl(activePhoto.path)} alt={activePhoto.filename} />
+              </div>
+              <div className="photo-footer">
+                <div className="photo-meta">
+                  {formatPhotoDate(activePhoto.creation_time, activePhoto.mtime_ms)}
+                </div>
+                <div className="photo-meta">
+                  {activePhoto.width && activePhoto.height
+                    ? `${activePhoto.width}×${activePhoto.height}`
+                    : "Dimensions unknown"}
+                </div>
+                <div className="photo-meta">
+                  {activePhoto.camera_make || activePhoto.camera_model
+                    ? [activePhoto.camera_make, activePhoto.camera_model].filter(Boolean).join(" ")
+                    : "Camera unknown"}
                 </div>
               </div>
             </div>

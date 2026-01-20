@@ -34,6 +34,23 @@ def verify_video_token(token: str | None) -> bool:
     return False
 
 
+def _guess_image_type(file_path: Path) -> str:
+    suffix = file_path.suffix.lower()
+    content_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".bmp": "image/bmp",
+        ".tif": "image/tiff",
+        ".tiff": "image/tiff",
+        ".heic": "image/heic",
+        ".heif": "image/heif",
+    }
+    return content_types.get(suffix, "application/octet-stream")
+
+
 @router.get("/thumbnail")
 async def get_thumbnail(
     path: str = Query(..., description="Absolute thumbnail path"),
@@ -153,4 +170,23 @@ async def get_video(
         file_path,
         media_type=content_type,
         headers={"Accept-Ranges": "bytes"},
+    )
+
+
+@router.get("/media", response_model=None)
+async def get_media(
+    path: str = Query(..., description="Absolute media path"),
+    token: str = Query(None, description="Auth token (for media elements that can't send headers)"),
+):
+    """Serve a media file (photo) via direct path with token auth."""
+    if not verify_video_token(token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    file_path = Path(path).resolve()
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Media not found")
+
+    return FileResponse(
+        file_path,
+        media_type=_guess_image_type(file_path),
     )

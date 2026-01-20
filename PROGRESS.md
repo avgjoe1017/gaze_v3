@@ -1976,3 +1976,134 @@ Implemented a complete facial recognition system for Gaze V3, enabling users to 
 - Auto-recognition threshold of 0.65 is conservative to avoid false positives
 
 ---
+
+## 2026-01-20 - Deep Dive Additions Roadmap + Decisions
+
+**Time:** Planning session
+
+**Summary:**
+Defined a full additions roadmap to evolve Gaze into a family-ready, privacy-first photo and video library. Captured key product decisions and a phased implementation plan.
+
+**Decisions:**
+1. **Data model:** Use a new `media` table (preferred) to support photos + videos cleanly and keep room for future media types.
+2. **Face recognition:** **Opt-in by default** with explicit consent and clear privacy explanation.
+3. **Backup/export:** **Metadata-only by default** (indexes, settings, labels, people), with optional media inclusion later.
+
+**Additions Plan:**
+
+# Plan
+
+Deliver a phased upgrade from video-only search to a family-friendly photo + video library with privacy-first UX, strong onboarding, and reliable backup/restore. Start with data model + engine pipeline, then UI surfaces, then smart organization and reliability hardening.
+
+## Scope
+- In: photo support, onboarding, privacy controls, settings, faces/people UI, backup/export, search/filters, reliability/edge cases, tests/validation.
+- Out: cloud sync, mobile apps, external analytics/telemetry, third-party sharing (for now).
+
+## Action items
+[ ] Define the media data model and migrations (new `media` table), update API contracts.
+[ ] Extend engine ingestion for photos (scanner + EXIF metadata + indexing stages per media type).
+[ ] Update MainView UX for photos + videos, add onboarding and folder discovery.
+[ ] Surface Faces/People in main nav with explicit opt-in consent flow; wire People filters into search.
+[ ] Add Settings UI for privacy + performance controls (offline mode, model management, indexing limits, storage location).
+[ ] Implement backup/export + restore flows (metadata-only by default) with integrity verification and rebuild index option.
+[ ] Add smart organization (metadata filters, smart albums, dedupe/quality signals).
+[ ] Validate reliability (resume/repair, actionable errors, large library performance) and run tests/packaging checks.
+[ ] Document privacy model, backup/restore, and onboarding in README and in-app help.
+
+**Next Steps:**
+1. Draft the new `media` schema and migration approach.
+2. Identify engine stages that should apply to photos vs videos.
+3. Prototype onboarding and privacy consent screens in UI.
+
+---
+
+## 2026-01-20 - P0 Implementation: Photo Indexing + Settings + Backup
+
+**Time:** Implementation session
+
+### Summary
+Implemented the P0 foundation for photo indexing, privacy settings, and metadata backup/restore. Photos now flow through the indexing pipeline with thumbnails, embeddings, and detections while face recognition remains opt-in by default.
+
+### Changes
+
+#### Photo Indexing Pipeline
+- Added `media_type` to `videos` table with migration + index.
+- Scanner now inserts **photos into both `media` and `videos`** (media_id == video_id) so photos can reuse existing indexing pipeline tables.
+- Photo changes update `media_metadata`, and photo deletions remove both `media` + `videos` rows.
+- Indexer now:
+  - Uses dynamic stage lists based on `media_type`.
+  - Creates photo thumbnails with Pillow (single frame) and inserts into `frames`.
+  - Uses configurable frame interval + thumbnail quality from settings.
+  - Syncs status/progress to both `videos` and `media`.
+
+#### Privacy + Offline Settings (P0)
+- Added settings keys: `offline_mode`, `face_recognition_enabled` (opt-in default).
+- Face recognition endpoints are **blocked when disabled**.
+- Offline mode blocks model downloads server-side and UI-side.
+- Added Settings UI with privacy toggles + indexing performance controls.
+
+#### Backup/Restore (Metadata-only)
+- New `/backup/export` + `/backup/restore` endpoints (metadata only).
+- Includes settings, libraries, media, media metadata, videos, video metadata, persons.
+- UI includes export + restore flow with merge/replace modes.
+- Note: Face crops, thumbnails, transcripts, detections, and FAISS indexes are not included (reindex required after restore).
+
+### Files Modified / Added
+- `engine/src/engine/db/connection.py` - `media_type` column + index + backfill
+- `engine/src/engine/core/scanner.py` - unified insert/update for photos + videos
+- `engine/src/engine/core/indexer.py` - photo stages, settings-driven pipeline, media sync
+- `engine/src/engine/utils/image_thumbnail.py` - photo thumbnail helper
+- `engine/src/engine/api/settings.py` - new privacy/offline settings
+- `engine/src/engine/api/models.py` - offline download blocking
+- `engine/src/engine/api/faces.py` - opt-in enforcement
+- `engine/src/engine/api/backup.py` - backup/export endpoints
+- `engine/src/engine/api/__init__.py` - backup router export
+- `engine/src/engine/main.py` - register backup router
+- `engine/src/engine/api/jobs.py` - cancel propagates to media
+- `engine/src/engine/api/videos.py` - filter `media_type = video`
+- `contracts/openapi.yaml` - settings + backup schemas and endpoints
+- `app/src/components/SettingsView.tsx` - new Settings UI
+- `app/src/components/ModelDownload.tsx` - offline mode handling
+- `app/src/components/MainView.tsx` - face-recognition gating
+- `app/src/App.tsx` - settings fetch + settings view + gating
+- `app/src/styles.css` - settings + toggle + alerts styling
+
+### Status
+- ✅ Photo indexing pipeline (P0 #1)
+- ✅ Settings UI + privacy/offline mode (P0 #2)
+- ✅ Metadata-only backup/restore (P0 #3)
+- ⚠️ Backup excludes derived artifacts (thumbnails/FAISS/transcripts/faces) by design
+
+---
+
+## 2026-01-20 - Privacy Trust Ledger UI + Outbound Network Tracking
+
+**Time:** Implementation session
+
+### Summary
+Added a dedicated Privacy view that makes local-only behavior verifiable and renames status labels to avoid “online” messaging. Implemented backend tracking for outbound model download requests with a session ledger endpoint.
+
+### Changes
+- Added outbound request tracking for model downloads (session counters + recent ledger).
+- New `/network/status` API endpoint to surface outbound counters and offline mode.
+- New `PrivacyView` UI with trust checklist, counters, and outbound ledger.
+- Status badges renamed to “Engine Running” and “Local Live”.
+- Settings label updated to “Disable Networking”.
+- OpenAPI contract updated with network status schemas.
+
+### Files Modified / Added
+- `engine/src/engine/core/network.py` (new)
+- `engine/src/engine/api/network.py` (new)
+- `engine/src/engine/api/models.py`
+- `engine/src/engine/api/__init__.py`
+- `engine/src/engine/main.py`
+- `contracts/openapi.yaml`
+- `app/src/components/PrivacyView.tsx` (new)
+- `app/src/App.tsx`
+- `app/src/components/SettingsView.tsx`
+- `app/src/styles.css`
+
+### Next Steps
+1. Add “Wipe derived data” action (transcripts, frames, detections, faces, FAISS, thumbnails) with rebuild prompt.
+2. Implement “Quick vs Deep” indexing presets in settings and pipeline staging.
+3. Add model pack import + checksum verification for air-gapped installs.

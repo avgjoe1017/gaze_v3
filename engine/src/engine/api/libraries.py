@@ -62,10 +62,10 @@ async def list_libraries(_token: str = Depends(verify_token)) -> LibrariesRespon
                 l.name,
                 l.recursive,
                 l.created_at_ms,
-                COUNT(v.video_id) as video_count,
-                SUM(CASE WHEN v.status = 'DONE' THEN 1 ELSE 0 END) as indexed_count
+                COUNT(m.media_id) as video_count,
+                SUM(CASE WHEN m.status = 'DONE' THEN 1 ELSE 0 END) as indexed_count
             FROM libraries l
-            LEFT JOIN videos v ON v.library_id = l.library_id
+            LEFT JOIN media m ON m.library_id = l.library_id
             GROUP BY l.library_id
             ORDER BY l.created_at_ms DESC
             """
@@ -151,10 +151,10 @@ async def get_library(library_id: str, _token: str = Depends(verify_token)) -> L
                 l.name,
                 l.recursive,
                 l.created_at_ms,
-                COUNT(v.video_id) as video_count,
-                SUM(CASE WHEN v.status = 'DONE' THEN 1 ELSE 0 END) as indexed_count
+                COUNT(m.media_id) as video_count,
+                SUM(CASE WHEN m.status = 'DONE' THEN 1 ELSE 0 END) as indexed_count
             FROM libraries l
-            LEFT JOIN videos v ON v.library_id = l.library_id
+            LEFT JOIN media m ON m.library_id = l.library_id
             WHERE l.library_id = ?
             GROUP BY l.library_id
             """,

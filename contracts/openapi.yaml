@@ -200,6 +200,53 @@ paths:
               schema:
                 $ref: "#/components/schemas/VideosResponse"
 
+  /media:
+    get:
+      operationId: listMedia
+      summary: List media items (photos + videos)
+      parameters:
+        - name: library_id
+          in: query
+          schema:
+            type: string
+        - name: media_type
+          in: query
+          schema:
+            type: string
+            enum: [photo, video]
+        - name: date_from
+          in: query
+          schema:
+            type: string
+            description: Filter by mtime date (YYYY-MM-DD)
+        - name: date_to
+          in: query
+          schema:
+            type: string
+            description: Filter by mtime date (YYYY-MM-DD)
+        - name: location_only
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 200
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of media
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaResponse"
+
   /videos/{id}:
     get:
       operationId: getVideo
@@ -264,6 +311,34 @@ paths:
                 format: binary
         "403":
           description: Forbidden
+        "404":
+          description: Not found
+
+  /assets/media:
+    get:
+      operationId: getMediaAsset
+      summary: Serve a media file (photo) by absolute path
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: token
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Media file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Unauthorized
         "404":
           description: Not found
 
@@ -386,6 +461,60 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Settings"
+
+  /network/status:
+    get:
+      operationId: getNetworkStatus
+      summary: Get outbound network counters for the current session
+      responses:
+        "200":
+          description: Network status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkStatusResponse"
+
+  /backup/export:
+    get:
+      operationId: exportBackup
+      summary: Export metadata-only backup
+      responses:
+        "200":
+          description: Backup payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupPayload"
+
+  /backup/restore:
+    post:
+      operationId: restoreBackup
+      summary: Restore metadata backup
+      parameters:
+        - name: mode
+          in: query
+          schema:
+            type: string
+            enum: [merge, replace]
+            default: merge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupPayload"
+      responses:
+        "200":
+          description: Restore status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  mode:
+                    type: string
 
   /logs:
     get:
@@ -888,7 +1017,10 @@ components:
       properties:
         status:
           type: string
-          enum: [started, already_downloaded, downloading]
+          enum: [started, already_downloaded, downloading, error]
+        error:
+          type: string
+          nullable: true
 
     Library:
       type: object
@@ -972,7 +1104,7 @@ components:
           type: integer
         status:
           type: string
-          enum: [QUEUED, EXTRACTING_AUDIO, TRANSCRIBING, EXTRACTING_FRAMES, EMBEDDING, DETECTING, DONE, FAILED, CANCELLED]
+          enum: [QUEUED, EXTRACTING_AUDIO, TRANSCRIBING, EXTRACTING_FRAMES, EMBEDDING, DETECTING, DETECTING_FACES, DONE, FAILED, CANCELLED]
         progress:
           type: number
           minimum: 0
@@ -985,6 +1117,82 @@ components:
           type: integer
         indexed_at_ms:
           type: integer
+
+    MediaItem:
+      type: object
+      required:
+        - media_id
+        - library_id
+        - path
+        - filename
+        - media_type
+        - status
+        - created_at_ms
+      properties:
+        media_id:
+          type: string
+        library_id:
+          type: string
+        path:
+          type: string
+        filename:
+          type: string
+        file_ext:
+          type: string
+          nullable: true
+        media_type:
+          type: string
+          enum: [photo, video]
+        file_size:
+          type: integer
+        mtime_ms:
+          type: integer
+        fingerprint:
+          type: string
+        duration_ms:
+          type: integer
+          nullable: true
+        width:
+          type: integer
+          nullable: true
+        height:
+          type: integer
+          nullable: true
+        creation_time:
+          type: string
+          nullable: true
+        camera_make:
+          type: string
+          nullable: true
+        camera_model:
+          type: string
+          nullable: true
+        gps_lat:
+          type: number
+          nullable: true
+        gps_lng:
+          type: number
+          nullable: true
+        status:
+          type: string
+        progress:
+          type: number
+          minimum: 0
+          maximum: 1
+        error_code:
+          type: string
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        indexed_at_ms:
+          type: integer
+          nullable: true
+        created_at_ms:
+          type: integer
+        thumbnail_path:
+          type: string
+          nullable: true
 
     Frame:
       type: object
@@ -1023,6 +1231,19 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Video"
+        total:
+          type: integer
+
+    MediaResponse:
+      type: object
+      required:
+        - media
+        - total
+      properties:
+        media:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaItem"
         total:
           type: integer
 
@@ -1104,7 +1325,7 @@ components:
           type: string
         status:
           type: string
-          enum: [PENDING, EXTRACTING_AUDIO, TRANSCRIBING, EXTRACTING_FRAMES, EMBEDDING, DETECTING, DONE, FAILED, CANCELLED]
+          enum: [PENDING, EXTRACTING_AUDIO, TRANSCRIBING, EXTRACTING_FRAMES, EMBEDDING, DETECTING, DETECTING_FACES, DONE, FAILED, CANCELLED]
         current_stage:
           type: string
         progress:
@@ -1157,6 +1378,10 @@ components:
         transcription_chunk_seconds:
           type: number
           nullable: true
+        offline_mode:
+          type: boolean
+        face_recognition_enabled:
+          type: boolean
 
     SettingsUpdate:
       type: object
@@ -1183,6 +1408,288 @@ components:
         transcription_chunk_seconds:
           type: number
           nullable: true
+        offline_mode:
+          type: boolean
+        face_recognition_enabled:
+          type: boolean
+
+    NetworkRequestEntry:
+      type: object
+      properties:
+        kind:
+          type: string
+        model:
+          type: string
+          nullable: true
+        url:
+          type: string
+        status:
+          type: string
+        attempt:
+          type: integer
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        timestamp_ms:
+          type: integer
+
+    NetworkStatusResponse:
+      type: object
+      required:
+        - offline_mode
+        - outbound_requests_total
+        - model_downloads_total
+        - recent_requests
+      properties:
+        offline_mode:
+          type: boolean
+        outbound_requests_total:
+          type: integer
+        model_downloads_total:
+          type: integer
+        recent_requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/NetworkRequestEntry"
+
+    BackupPayload:
+      type: object
+      properties:
+        version:
+          type: string
+        created_at_ms:
+          type: integer
+        settings:
+          type: object
+        libraries:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupLibrary"
+        media:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupMedia"
+        media_metadata:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupMediaMetadata"
+        videos:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupVideo"
+        video_metadata:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupVideoMetadata"
+        persons:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupPerson"
+
+    BackupLibrary:
+      type: object
+      properties:
+        library_id:
+          type: string
+        folder_path:
+          type: string
+        name:
+          type: string
+          nullable: true
+        recursive:
+          type: boolean
+        created_at_ms:
+          type: integer
+
+    BackupMedia:
+      type: object
+      properties:
+        media_id:
+          type: string
+        library_id:
+          type: string
+        path:
+          type: string
+        filename:
+          type: string
+        file_ext:
+          type: string
+          nullable: true
+        media_type:
+          type: string
+        file_size:
+          type: integer
+        mtime_ms:
+          type: integer
+        fingerprint:
+          type: string
+        duration_ms:
+          type: integer
+          nullable: true
+        width:
+          type: integer
+          nullable: true
+        height:
+          type: integer
+          nullable: true
+        creation_time:
+          type: string
+          nullable: true
+        camera_make:
+          type: string
+          nullable: true
+        camera_model:
+          type: string
+          nullable: true
+        gps_lat:
+          type: number
+          nullable: true
+        gps_lng:
+          type: number
+          nullable: true
+        status:
+          type: string
+        progress:
+          type: number
+        error_code:
+          type: string
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        indexed_at_ms:
+          type: integer
+          nullable: true
+        created_at_ms:
+          type: integer
+
+    BackupMediaMetadata:
+      type: object
+      properties:
+        media_id:
+          type: string
+        key:
+          type: string
+        value:
+          type: string
+          nullable: true
+
+    BackupVideo:
+      type: object
+      properties:
+        video_id:
+          type: string
+        library_id:
+          type: string
+        path:
+          type: string
+        filename:
+          type: string
+        media_type:
+          type: string
+        file_size:
+          type: integer
+        mtime_ms:
+          type: integer
+        fingerprint:
+          type: string
+        duration_ms:
+          type: integer
+          nullable: true
+        width:
+          type: integer
+          nullable: true
+        height:
+          type: integer
+          nullable: true
+        fps:
+          type: number
+          nullable: true
+        video_codec:
+          type: string
+          nullable: true
+        video_bitrate:
+          type: integer
+          nullable: true
+        audio_codec:
+          type: string
+          nullable: true
+        audio_channels:
+          type: integer
+          nullable: true
+        audio_sample_rate:
+          type: integer
+          nullable: true
+        container_format:
+          type: string
+          nullable: true
+        rotation:
+          type: integer
+        creation_time:
+          type: string
+          nullable: true
+        camera_make:
+          type: string
+          nullable: true
+        camera_model:
+          type: string
+          nullable: true
+        gps_lat:
+          type: number
+          nullable: true
+        gps_lng:
+          type: number
+          nullable: true
+        status:
+          type: string
+        last_completed_stage:
+          type: string
+          nullable: true
+        progress:
+          type: number
+        error_code:
+          type: string
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        language_code:
+          type: string
+          nullable: true
+        indexed_at_ms:
+          type: integer
+          nullable: true
+        created_at_ms:
+          type: integer
+
+    BackupVideoMetadata:
+      type: object
+      properties:
+        video_id:
+          type: string
+        key:
+          type: string
+        value:
+          type: string
+          nullable: true
+
+    BackupPerson:
+      type: object
+      properties:
+        person_id:
+          type: string
+        name:
+          type: string
+        thumbnail_face_id:
+          type: string
+          nullable: true
+        face_count:
+          type: integer
+        created_at_ms:
+          type: integer
+        updated_at_ms:
+          type: integer
 
     LogEntry:
       type: object

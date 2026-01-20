@@ -29,6 +29,7 @@ from ..ml.face_detector import (
     compute_face_similarity,
 )
 from ..utils.ffmpeg import extract_audio, extract_frames
+from ..utils.image_thumbnail import create_photo_thumbnail
 from ..utils.logging import get_logger
 from ..utils.paths import get_temp_dir, get_thumbnails_dir, get_faiss_dir
 from ..ws.handler import emit_job_progress, emit_job_complete, emit_job_failed
@@ -36,9 +37,16 @@ from ..ws.handler import emit_job_progress, emit_job_complete, emit_job_failed
 logger = get_logger(__name__)
 
 # Stage order for state machine
-STAGES = [
+VIDEO_STAGES = [
     "EXTRACTING_AUDIO",
     "TRANSCRIBING",
+    "EXTRACTING_FRAMES",
+    "EMBEDDING",
+    "DETECTING",
+    "DETECTING_FACES",
+]
+
+PHOTO_STAGES = [
     "EXTRACTING_FRAMES",
     "EMBEDDING",
     "DETECTING",
@@ -105,6 +113,113 @@ async def get_transcription_settings() -> dict[str, object]:
                 defaults[key] = row["value"]
 
     return defaults
+
+
+async def get_indexer_settings() -> dict[str, object]:
+    """Get indexing settings with defaults."""
+    defaults: dict[str, object] = {
+        "frame_interval_seconds": 2.0,
+        "thumbnail_quality": 85,
+        "max_concurrent_jobs": 2,
+        "face_recognition_enabled": False,
+    }
+
+    keys = tuple(defaults.keys())
+    async for db in get_db():
+        cursor = await db.execute(
+            f"""
+            SELECT key, value
+            FROM settings
+            WHERE key IN ({",".join("?" * len(keys))})
+            """,
+            keys,
+        )
+        rows = await cursor.fetchall()
+        for row in rows:
+            key = row["key"]
+            try:
+                defaults[key] = json.loads(row["value"])
+            except Exception:
+                defaults[key] = row["value"]
+
+    return defaults
+
+
+def get_stage_list(media_type: str, face_recognition_enabled: bool) -> list[str]:
+    """Return indexing stages based on media type and settings."""
+    stages = VIDEO_STAGES if media_type == "video" else PHOTO_STAGES
+    if not face_recognition_enabled:
+        stages = [stage for stage in stages if stage != "DETECTING_FACES"]
+    return stages
+
+
+async def update_video_and_media_state(
+    video_id: str,
+    *,
+    status: str | None = None,
+    progress: float | None = None,
+    last_completed_stage: str | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    indexed_at_ms: int | None = None,
+) -> None:
+    """Update processing state for both videos and media tables."""
+    video_fields: list[str] = []
+    video_params: list[object] = []
+
+    if status is not None:
+        video_fields.append("status = ?")
+        video_params.append(status)
+    if progress is not None:
+        video_fields.append("progress = ?")
+        video_params.append(progress)
+    if last_completed_stage is not None:
+        video_fields.append("last_completed_stage = ?")
+        video_params.append(last_completed_stage)
+    if error_code is not None:
+        video_fields.append("error_code = ?")
+        video_params.append(error_code)
+    if error_message is not None:
+        video_fields.append("error_message = ?")
+        video_params.append(error_message)
+    if indexed_at_ms is not None:
+        video_fields.append("indexed_at_ms = ?")
+        video_params.append(indexed_at_ms)
+
+    media_fields: list[str] = []
+    media_params: list[object] = []
+
+    if status is not None:
+        media_fields.append("status = ?")
+        media_params.append(status)
+    if progress is not None:
+        media_fields.append("progress = ?")
+        media_params.append(progress)
+    if error_code is not None:
+        media_fields.append("error_code = ?")
+        media_params.append(error_code)
+    if error_message is not None:
+        media_fields.append("error_message = ?")
+        media_params.append(error_message)
+    if indexed_at_ms is not None:
+        media_fields.append("indexed_at_ms = ?")
+        media_params.append(indexed_at_ms)
+
+    if not video_fields and not media_fields:
+        return
+
+    async for db in get_db():
+        if video_fields:
+            await db.execute(
+                f"UPDATE videos SET {', '.join(video_fields)} WHERE video_id = ?",
+                (*video_params, video_id),
+            )
+        if media_fields:
+            await db.execute(
+                f"UPDATE media SET {', '.join(media_fields)} WHERE media_id = ?",
+                (*media_params, video_id),
+            )
+        await db.commit()
 
 
 async def get_known_person_embeddings() -> dict[str, np.ndarray]:
@@ -183,7 +298,7 @@ async def process_video(video_id: str) -> None:
     async for db in get_db():
         cursor = await db.execute(
             """
-            SELECT video_id, path, filename, library_id, status, last_completed_stage
+            SELECT video_id, path, filename, library_id, status, last_completed_stage, media_type
             FROM videos
             WHERE video_id = ?
             """,
@@ -198,35 +313,49 @@ async def process_video(video_id: str) -> None:
         filename = row["filename"]
         current_status = row["status"]
         last_completed_stage = row["last_completed_stage"]
+        media_type = row["media_type"] or "video"
+
+    indexer_settings = await get_indexer_settings()
+    stages = get_stage_list(media_type, bool(indexer_settings.get("face_recognition_enabled")))
 
     # Determine starting stage
     # Verify artifacts exist before resuming from a stage
     start_from = 0
     if last_completed_stage:
         try:
-            stage_index = STAGES.index(last_completed_stage)
-            # Check if we can resume from the next stage
-            # Verify required artifacts exist for the completed stage
-            temp_dir = get_temp_dir()
-            
-            if last_completed_stage == "EXTRACTING_AUDIO":
-                # Verify audio file exists and is not empty
-                audio_path = temp_dir / f"{video_id}.wav"
-                if audio_path.exists() and audio_path.stat().st_size > 0:
-                    start_from = stage_index + 1
+            stage_index = stages.index(last_completed_stage)
+            if media_type == "photo":
+                thumbnails_dir = get_thumbnails_dir() / video_id
+                has_frames = any(thumbnails_dir.glob("frame_*.jpg"))
+                if has_frames:
+                    start_from = stage_index + 1 if stage_index < len(stages) - 1 else len(stages)
                 else:
-                    logger.warning(f"Audio file missing or empty, restarting from EXTRACTING_AUDIO: {audio_path}")
-                    start_from = 0
-            elif stage_index < len(STAGES) - 1:
-                # For other stages, check if audio exists (required for all subsequent stages)
-                audio_path = temp_dir / f"{video_id}.wav"
-                if audio_path.exists() and audio_path.stat().st_size > 0:
-                    start_from = stage_index + 1
-                else:
-                    logger.warning(f"Audio file missing, restarting from EXTRACTING_AUDIO: {audio_path}")
+                    logger.warning(
+                        f"Photo thumbnails missing, restarting from EXTRACTING_FRAMES: {thumbnails_dir}"
+                    )
                     start_from = 0
             else:
-                start_from = len(STAGES)
+                temp_dir = get_temp_dir()
+                if last_completed_stage == "EXTRACTING_AUDIO":
+                    audio_path = temp_dir / f"{video_id}.wav"
+                    if audio_path.exists() and audio_path.stat().st_size > 0:
+                        start_from = stage_index + 1
+                    else:
+                        logger.warning(
+                            f"Audio file missing or empty, restarting from EXTRACTING_AUDIO: {audio_path}"
+                        )
+                        start_from = 0
+                elif stage_index < len(stages) - 1:
+                    audio_path = temp_dir / f"{video_id}.wav"
+                    if audio_path.exists() and audio_path.stat().st_size > 0:
+                        start_from = stage_index + 1
+                    else:
+                        logger.warning(
+                            f"Audio file missing, restarting from EXTRACTING_AUDIO: {audio_path}"
+                        )
+                        start_from = 0
+                else:
+                    start_from = len(stages)
         except ValueError:
             start_from = 0
 
@@ -246,16 +375,11 @@ async def process_video(video_id: str) -> None:
 
     try:
         # Update video status to first stage
-        current_stage = STAGES[start_from] if start_from < len(STAGES) else "DONE"
-        async for db in get_db():
-            await db.execute(
-                "UPDATE videos SET status = ? WHERE video_id = ?",
-                (current_stage, video_id),
-            )
-            await db.commit()
+        current_stage = stages[start_from] if start_from < len(stages) else "DONE"
+        await update_video_and_media_state(video_id, status=current_stage)
 
         # Process through each stage
-        for stage_index in range(start_from, len(STAGES)):
+        for stage_index in range(start_from, len(stages)):
             # Check for cancellation before each stage
             if await check_job_cancelled(video_id):
                 logger.info(f"Job cancelled for video {video_id}")
@@ -268,7 +392,7 @@ async def process_video(video_id: str) -> None:
                 )
                 return
 
-            stage = STAGES[stage_index]
+            stage = stages[stage_index]
             current_stage = stage
 
             # Update job status
@@ -284,15 +408,14 @@ async def process_video(video_id: str) -> None:
                 await db.commit()
 
             # Update video status
-            async for db in get_db():
-                await db.execute(
-                    "UPDATE videos SET status = ?, last_completed_stage = ? WHERE video_id = ?",
-                    (stage, stage, video_id),
-                )
-                await db.commit()
+            await update_video_and_media_state(
+                video_id,
+                status=stage,
+                last_completed_stage=stage,
+            )
 
             # Emit progress
-            progress = (stage_index + 1) / len(STAGES)
+            progress = (stage_index + 1) / len(stages)
             await emit_job_progress(
                 job_id=job_id,
                 video_id=video_id,
@@ -302,27 +425,22 @@ async def process_video(video_id: str) -> None:
             )
 
             # Process the stage
-            await process_stage(video_id, video_path, stage, job_id)
+            await process_stage(
+                video_id,
+                video_path,
+                stage,
+                job_id,
+                media_type=media_type,
+                frame_interval_seconds=float(indexer_settings.get("frame_interval_seconds", 2.0)),
+                thumbnail_quality=int(indexer_settings.get("thumbnail_quality", 85)),
+            )
 
             # Update progress
-            async for db in get_db():
-                await db.execute(
-                    "UPDATE videos SET progress = ? WHERE video_id = ?",
-                    (progress, video_id),
-                )
-                await db.commit()
+            await update_video_and_media_state(video_id, progress=progress)
 
         # Mark as DONE
         indexed_at_ms = int(datetime.now().timestamp() * 1000)
         async for db in get_db():
-            await db.execute(
-                """
-                UPDATE videos
-                SET status = 'DONE', progress = 1.0, indexed_at_ms = ?
-                WHERE video_id = ?
-                """,
-                (indexed_at_ms, video_id),
-            )
             await db.execute(
                 """
                 UPDATE jobs
@@ -332,6 +450,8 @@ async def process_video(video_id: str) -> None:
                 (indexed_at_ms, job_id),
             )
             await db.commit()
+
+        await update_video_and_media_state(video_id, status="DONE", progress=1.0, indexed_at_ms=indexed_at_ms)
 
         await emit_job_complete(job_id=job_id, video_id=video_id)
         logger.info(f"Completed indexing for video {video_id}")
@@ -357,15 +477,13 @@ async def process_video(video_id: str) -> None:
     except asyncio.CancelledError:
         # Task was cancelled (e.g., by stop_indexing)
         logger.info(f"Indexing task cancelled for video {video_id}")
+        await update_video_and_media_state(
+            video_id,
+            status="CANCELLED",
+            error_code="CANCELLED",
+            error_message=ERROR_CODES["CANCELLED"],
+        )
         async for db in get_db():
-            await db.execute(
-                """
-                UPDATE videos
-                SET status = 'CANCELLED', error_code = 'CANCELLED', error_message = ?
-                WHERE video_id = ?
-                """,
-                (ERROR_CODES["CANCELLED"], video_id),
-            )
             await db.execute(
                 """
                 UPDATE jobs
@@ -389,15 +507,13 @@ async def process_video(video_id: str) -> None:
         error_code = "FILE_NOT_FOUND"
         error_message = ERROR_CODES[error_code]
 
+        await update_video_and_media_state(
+            video_id,
+            status="FAILED",
+            error_code=error_code,
+            error_message=error_message,
+        )
         async for db in get_db():
-            await db.execute(
-                """
-                UPDATE videos
-                SET status = 'FAILED', error_code = ?, error_message = ?
-                WHERE video_id = ?
-                """,
-                (error_code, error_message, video_id),
-            )
             await db.execute(
                 """
                 UPDATE jobs
@@ -437,15 +553,13 @@ async def process_video(video_id: str) -> None:
         error_message = f"{ERROR_CODES[error_code]} Details: {str(e)}"
 
         # Mark as FAILED
+        await update_video_and_media_state(
+            video_id,
+            status="FAILED",
+            error_code=error_code,
+            error_message=error_message,
+        )
         async for db in get_db():
-            await db.execute(
-                """
-                UPDATE videos
-                SET status = 'FAILED', error_code = ?, error_message = ?
-                WHERE video_id = ?
-                """,
-                (error_code, error_message, video_id),
-            )
             await db.execute(
                 """
                 UPDATE jobs
@@ -465,7 +579,16 @@ async def process_video(video_id: str) -> None:
         )
 
 
-async def process_stage(video_id: str, video_path: Path, stage: str, job_id: str | None = None) -> None:
+async def process_stage(
+    video_id: str,
+    video_path: Path,
+    stage: str,
+    job_id: str | None = None,
+    *,
+    media_type: str = "video",
+    frame_interval_seconds: float = 2.0,
+    thumbnail_quality: int = 85,
+) -> None:
     """Process a single indexing stage."""
     logger.debug(f"Processing stage {stage} for video {video_id}")
 
@@ -578,15 +701,28 @@ async def process_stage(video_id: str, video_path: Path, stage: str, job_id: str
                 raise
 
     elif stage == "EXTRACTING_FRAMES":
-        # Extract frames using FFmpeg (1 frame per 2 seconds)
         thumbnails_dir = get_thumbnails_dir() / video_id
         thumbnails_dir.mkdir(parents=True, exist_ok=True)
 
-        # Check if frames already exist (resumable)
-        existing_frames = list(thumbnails_dir.glob("frame_*.jpg"))
-        if not existing_frames:
-            await extract_frames(video_path, thumbnails_dir, interval_seconds=2.0)
-            existing_frames = sorted(thumbnails_dir.glob("frame_*.jpg"))
+        if media_type == "photo":
+            frame_path = thumbnails_dir / "frame_000001.jpg"
+            if not frame_path.exists():
+                create_photo_thumbnail(
+                    video_path,
+                    frame_path,
+                    max_dimension=1280,
+                    quality=thumbnail_quality,
+                )
+            existing_frames = [frame_path]
+        else:
+            existing_frames = list(thumbnails_dir.glob("frame_*.jpg"))
+            if not existing_frames:
+                await extract_frames(
+                    video_path,
+                    thumbnails_dir,
+                    interval_seconds=frame_interval_seconds,
+                )
+                existing_frames = sorted(thumbnails_dir.glob("frame_*.jpg"))
 
         # Save frame metadata to database (including colors)
         async for db in get_db():
@@ -596,10 +732,8 @@ async def process_stage(video_id: str, video_path: Path, stage: str, job_id: str
             # Insert frames with color extraction
             for idx, frame_path in enumerate(existing_frames):
                 frame_id = f"{video_id}_frame_{idx:06d}"
-                # Calculate timestamp from frame index (2 seconds per frame)
-                timestamp_ms = idx * 2000
+                timestamp_ms = 0 if media_type == "photo" else int(idx * frame_interval_seconds * 1000)
 
-                # Extract dominant colors for this frame
                 try:
                     colors = await extract_dominant_colors(frame_path, num_colors=5)
                     colors_str = ",".join(colors) if colors else None
@@ -857,6 +991,14 @@ async def process_stage(video_id: str, video_path: Path, stage: str, job_id: str
 
 async def start_indexing_queued_videos(limit: int = 10) -> dict:
     """Start indexing for up to N queued videos."""
+    settings = await get_indexer_settings()
+    max_jobs = int(settings.get("max_concurrent_jobs", 2))
+    active_count = len([t for t in _active_jobs.values() if not t.done()])
+    available_slots = max(max_jobs - active_count, 0)
+    if available_slots <= 0:
+        return {"started": 0, "message": "Max concurrent jobs already running"}
+
+    limit = min(limit, available_slots)
     logger.info(f"Starting indexing for up to {limit} queued videos")
 
     # Get queued videos

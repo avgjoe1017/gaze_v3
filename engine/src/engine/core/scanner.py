@@ -1,4 +1,4 @@
-"""File scanner for discovering and fingerprinting video files."""
+"""File scanner for discovering and fingerprinting media files."""
 
 import asyncio
 import hashlib
@@ -9,6 +9,7 @@ from typing import AsyncGenerator
 
 from ..db.connection import get_db
 from ..utils.ffprobe import get_video_metadata
+from ..utils.image_metadata import get_image_metadata
 from ..utils.logging import get_logger
 from ..ws.handler import emit_scan_progress, emit_scan_complete
 
@@ -19,6 +20,14 @@ VIDEO_EXTENSIONS = {
     ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
     ".m4v", ".mpg", ".mpeg", ".3gp", ".3g2", ".ts", ".mts",
 }
+
+# Supported photo extensions
+PHOTO_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp",
+    ".bmp", ".tiff", ".tif", ".gif",
+}
+
+MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | PHOTO_EXTENSIONS
 
 
 def compute_fingerprint(path: Path) -> str:
@@ -49,11 +58,11 @@ def compute_fingerprint(path: Path) -> str:
     return hashlib.sha256(content).hexdigest()[:16]
 
 
-async def discover_videos(folder: Path, recursive: bool = True) -> AsyncGenerator[Path, None]:
+async def discover_media(folder: Path, recursive: bool = True) -> AsyncGenerator[Path, None]:
     """
-    Discover video files in a folder.
+    Discover media files in a folder.
 
-    Yields paths to video files.
+    Yields paths to media files.
     """
     if recursive:
         pattern = "**/*"
@@ -61,13 +70,13 @@ async def discover_videos(folder: Path, recursive: bool = True) -> AsyncGenerato
         pattern = "*"
 
     for path in folder.glob(pattern):
-        if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS:
+        if path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS:
             yield path
 
 
 async def scan_library(library_id: str, folder_path: str, recursive: bool = True) -> dict:
     """
-    Scan a library folder for videos.
+    Scan a library folder for media.
 
     Returns statistics about the scan.
     """
@@ -85,162 +94,414 @@ async def scan_library(library_id: str, folder_path: str, recursive: bool = True
         "files_deleted": 0,
     }
 
-    # Get existing videos in this library
-    existing_videos: dict[str, tuple[str, str]] = {}  # path -> (video_id, fingerprint)
+    # Get existing media in this library
+    existing_media: dict[str, tuple[str, str, str]] = {}  # path -> (media_id, media_type, fingerprint)
+    existing_videos: dict[str, tuple[str, str, str]] = {}  # path -> (video_id, fingerprint, media_type)
 
     async for db in get_db():
         cursor = await db.execute(
-            "SELECT video_id, path, fingerprint FROM videos WHERE library_id = ?",
+            "SELECT media_id, path, media_type, fingerprint FROM media WHERE library_id = ?",
             (library_id,),
         )
         rows = await cursor.fetchall()
         for row in rows:
-            existing_videos[row["path"]] = (row["video_id"], row["fingerprint"])
+            existing_media[row["path"]] = (row["media_id"], row["media_type"], row["fingerprint"])
+
+        cursor = await db.execute(
+            "SELECT video_id, path, fingerprint, media_type FROM videos WHERE library_id = ?",
+            (library_id,),
+        )
+        rows = await cursor.fetchall()
+        for row in rows:
+            existing_videos[row["path"]] = (
+                row["video_id"],
+                row["fingerprint"],
+                row["media_type"] or "video",
+            )
 
     # Track which existing paths we've seen
     seen_paths: set[str] = set()
 
     # Scan for videos
-    async for video_path in discover_videos(folder, recursive):
+    async for media_path in discover_media(folder, recursive):
         stats["files_found"] += 1
-        path_str = str(video_path)
+        path_str = str(media_path)
         seen_paths.add(path_str)
 
         try:
-            stat = video_path.stat()
-            fingerprint = compute_fingerprint(video_path)
+            stat = media_path.stat()
+            fingerprint = compute_fingerprint(media_path)
+            media_type = "video" if media_path.suffix.lower() in VIDEO_EXTENSIONS else "photo"
 
-            if path_str in existing_videos:
-                video_id, old_fingerprint = existing_videos[path_str]
+            if media_type == "video":
+                metadata = await get_video_metadata(media_path)
+            else:
+                metadata = await get_image_metadata(media_path)
 
-                if fingerprint == old_fingerprint:
-                    # Unchanged
+            if path_str in existing_media:
+                media_id, old_media_type, old_fingerprint = existing_media[path_str]
+
+                if fingerprint == old_fingerprint and media_type == old_media_type:
                     stats["files_unchanged"] += 1
                 else:
-                    # Changed - update fingerprint, metadata, and reset status
                     stats["files_changed"] += 1
-                    # Re-extract comprehensive metadata for changed files
-                    metadata = await get_video_metadata(video_path)
 
                     async for db in get_db():
                         await db.execute(
                             """
-                            UPDATE videos
-                            SET fingerprint = ?, mtime_ms = ?, file_size = ?,
+                            UPDATE media
+                            SET fingerprint = ?, mtime_ms = ?, file_size = ?, media_type = ?, file_ext = ?,
                                 duration_ms = ?, width = ?, height = ?,
-                                fps = ?, video_codec = ?, video_bitrate = ?,
-                                audio_codec = ?, audio_channels = ?, audio_sample_rate = ?,
-                                container_format = ?, rotation = ?,
                                 creation_time = ?, camera_make = ?, camera_model = ?,
                                 gps_lat = ?, gps_lng = ?,
-                                status = 'QUEUED', progress = 0, last_completed_stage = NULL
-                            WHERE video_id = ?
+                                status = 'QUEUED', progress = 0, error_code = NULL, error_message = NULL
+                            WHERE media_id = ?
                             """,
                             (
                                 fingerprint,
                                 int(stat.st_mtime * 1000),
                                 stat.st_size,
-                                metadata.get("duration_ms"),
-                                metadata.get("width"),
-                                metadata.get("height"),
-                                metadata.get("fps"),
-                                metadata.get("video_codec"),
-                                metadata.get("video_bitrate"),
-                                metadata.get("audio_codec"),
-                                metadata.get("audio_channels"),
-                                metadata.get("audio_sample_rate"),
-                                metadata.get("container_format"),
-                                metadata.get("rotation", 0),
-                                metadata.get("creation_time"),
-                                metadata.get("camera_make"),
-                                metadata.get("camera_model"),
-                                metadata.get("gps_lat"),
-                                metadata.get("gps_lng"),
-                                video_id,
+                                media_type,
+                                media_path.suffix.lower(),
+                                metadata.get("duration_ms") if metadata else None,
+                                metadata.get("width") if metadata else None,
+                                metadata.get("height") if metadata else None,
+                                metadata.get("creation_time") if metadata else None,
+                                metadata.get("camera_make") if metadata else None,
+                                metadata.get("camera_model") if metadata else None,
+                                metadata.get("gps_lat") if metadata else None,
+                                metadata.get("gps_lng") if metadata else None,
+                                media_id,
                             ),
                         )
 
-                        # Update extra metadata
-                        extra_metadata = metadata.get("extra_metadata", {})
+                        await db.execute("DELETE FROM media_metadata WHERE media_id = ?", (media_id,))
+                        if media_type == "photo":
+                            extra_metadata = metadata.get("extra_metadata", {}) if metadata else {}
+                            for key, value in extra_metadata.items():
+                                await db.execute(
+                                    """
+                                    INSERT OR REPLACE INTO media_metadata (media_id, key, value)
+                                    VALUES (?, ?, ?)
+                                    """,
+                                    (media_id, key, str(value)),
+                                )
+                        await db.commit()
+
+                    async for db in get_db():
+                        if path_str in existing_videos:
+                            if media_type == "video":
+                                await db.execute(
+                                    """
+                                    UPDATE videos
+                                    SET media_type = ?, fingerprint = ?, mtime_ms = ?, file_size = ?,
+                                        duration_ms = ?, width = ?, height = ?,
+                                        fps = ?, video_codec = ?, video_bitrate = ?,
+                                        audio_codec = ?, audio_channels = ?, audio_sample_rate = ?,
+                                        container_format = ?, rotation = ?,
+                                        creation_time = ?, camera_make = ?, camera_model = ?,
+                                        gps_lat = ?, gps_lng = ?,
+                                        status = 'QUEUED', progress = 0, last_completed_stage = NULL
+                                    WHERE video_id = ?
+                                    """,
+                                    (
+                                        media_type,
+                                        fingerprint,
+                                        int(stat.st_mtime * 1000),
+                                        stat.st_size,
+                                        metadata.get("duration_ms") if metadata else None,
+                                        metadata.get("width") if metadata else None,
+                                        metadata.get("height") if metadata else None,
+                                        metadata.get("fps") if metadata else None,
+                                        metadata.get("video_codec") if metadata else None,
+                                        metadata.get("video_bitrate") if metadata else None,
+                                        metadata.get("audio_codec") if metadata else None,
+                                        metadata.get("audio_channels") if metadata else None,
+                                        metadata.get("audio_sample_rate") if metadata else None,
+                                        metadata.get("container_format") if metadata else None,
+                                        metadata.get("rotation", 0) if metadata else 0,
+                                        metadata.get("creation_time") if metadata else None,
+                                        metadata.get("camera_make") if metadata else None,
+                                        metadata.get("camera_model") if metadata else None,
+                                        metadata.get("gps_lat") if metadata else None,
+                                        metadata.get("gps_lng") if metadata else None,
+                                        media_id,
+                                    ),
+                                )
+                            else:
+                                await db.execute(
+                                    """
+                                    UPDATE videos
+                                    SET media_type = ?, fingerprint = ?, mtime_ms = ?, file_size = ?,
+                                        duration_ms = NULL, width = ?, height = ?,
+                                        fps = NULL, video_codec = NULL, video_bitrate = NULL,
+                                        audio_codec = NULL, audio_channels = NULL, audio_sample_rate = NULL,
+                                        container_format = NULL, rotation = 0,
+                                        creation_time = ?, camera_make = ?, camera_model = ?,
+                                        gps_lat = ?, gps_lng = ?,
+                                        status = 'QUEUED', progress = 0, last_completed_stage = NULL
+                                    WHERE video_id = ?
+                                    """,
+                                    (
+                                        media_type,
+                                        fingerprint,
+                                        int(stat.st_mtime * 1000),
+                                        stat.st_size,
+                                        metadata.get("width") if metadata else None,
+                                        metadata.get("height") if metadata else None,
+                                        metadata.get("creation_time") if metadata else None,
+                                        metadata.get("camera_make") if metadata else None,
+                                        metadata.get("camera_model") if metadata else None,
+                                        metadata.get("gps_lat") if metadata else None,
+                                        metadata.get("gps_lng") if metadata else None,
+                                        media_id,
+                                    ),
+                                )
+                        else:
+                            created_at_ms = int(datetime.now().timestamp() * 1000)
+                            if media_type == "video":
+                                await db.execute(
+                                    """
+                                    INSERT INTO videos (
+                                        video_id, library_id, path, filename, media_type, file_size,
+                                        mtime_ms, fingerprint, duration_ms, width, height,
+                                        fps, video_codec, video_bitrate,
+                                        audio_codec, audio_channels, audio_sample_rate,
+                                        container_format, rotation,
+                                        creation_time, camera_make, camera_model,
+                                        gps_lat, gps_lng,
+                                        status, progress, created_at_ms
+                                    )
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', 0, ?)
+                                    """,
+                                    (
+                                        media_id,
+                                        library_id,
+                                        path_str,
+                                        media_path.name,
+                                        media_type,
+                                        stat.st_size,
+                                        int(stat.st_mtime * 1000),
+                                        fingerprint,
+                                        metadata.get("duration_ms") if metadata else None,
+                                        metadata.get("width") if metadata else None,
+                                        metadata.get("height") if metadata else None,
+                                        metadata.get("fps") if metadata else None,
+                                        metadata.get("video_codec") if metadata else None,
+                                        metadata.get("video_bitrate") if metadata else None,
+                                        metadata.get("audio_codec") if metadata else None,
+                                        metadata.get("audio_channels") if metadata else None,
+                                        metadata.get("audio_sample_rate") if metadata else None,
+                                        metadata.get("container_format") if metadata else None,
+                                        metadata.get("rotation", 0) if metadata else 0,
+                                        metadata.get("creation_time") if metadata else None,
+                                        metadata.get("camera_make") if metadata else None,
+                                        metadata.get("camera_model") if metadata else None,
+                                        metadata.get("gps_lat") if metadata else None,
+                                        metadata.get("gps_lng") if metadata else None,
+                                        created_at_ms,
+                                    ),
+                                )
+                            else:
+                                await db.execute(
+                                    """
+                                    INSERT INTO videos (
+                                        video_id, library_id, path, filename, media_type, file_size,
+                                        mtime_ms, fingerprint, duration_ms, width, height,
+                                        fps, video_codec, video_bitrate,
+                                        audio_codec, audio_channels, audio_sample_rate,
+                                        container_format, rotation,
+                                        creation_time, camera_make, camera_model,
+                                        gps_lat, gps_lng,
+                                        status, progress, created_at_ms
+                                    )
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, ?, ?, ?, ?, ?, 'QUEUED', 0, ?)
+                                    """,
+                                    (
+                                        media_id,
+                                        library_id,
+                                        path_str,
+                                        media_path.name,
+                                        media_type,
+                                        stat.st_size,
+                                        int(stat.st_mtime * 1000),
+                                        fingerprint,
+                                        metadata.get("width") if metadata else None,
+                                        metadata.get("height") if metadata else None,
+                                        metadata.get("creation_time") if metadata else None,
+                                        metadata.get("camera_make") if metadata else None,
+                                        metadata.get("camera_model") if metadata else None,
+                                        metadata.get("gps_lat") if metadata else None,
+                                        metadata.get("gps_lng") if metadata else None,
+                                        created_at_ms,
+                                    ),
+                                )
+
+                        await db.execute("DELETE FROM video_metadata WHERE video_id = ?", (media_id,))
+                        await db.commit()
+
+                    if media_type == "video":
+                        extra_metadata = metadata.get("extra_metadata", {}) if metadata else {}
+                        async for db in get_db():
+                            for key, value in extra_metadata.items():
+                                await db.execute(
+                                    """
+                                    INSERT OR REPLACE INTO video_metadata (video_id, key, value)
+                                    VALUES (?, ?, ?)
+                                    """,
+                                    (media_id, key, str(value) if value else None),
+                                )
+                            await db.commit()
+            else:
+                stats["files_new"] += 1
+                media_id = str(uuid.uuid4())
+                created_at_ms = int(datetime.now().timestamp() * 1000)
+
+                async for db in get_db():
+                    await db.execute(
+                        """
+                        INSERT INTO media (
+                            media_id, library_id, path, filename, file_ext, media_type,
+                            file_size, mtime_ms, fingerprint, duration_ms, width, height,
+                            creation_time, camera_make, camera_model, gps_lat, gps_lng,
+                            status, progress, indexed_at_ms, created_at_ms
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', 0, NULL, ?)
+                        """,
+                        (
+                            media_id,
+                            library_id,
+                            path_str,
+                            media_path.name,
+                            media_path.suffix.lower(),
+                            media_type,
+                            stat.st_size,
+                            int(stat.st_mtime * 1000),
+                            fingerprint,
+                            metadata.get("duration_ms") if metadata else None,
+                            metadata.get("width") if metadata else None,
+                            metadata.get("height") if metadata else None,
+                            metadata.get("creation_time") if metadata else None,
+                            metadata.get("camera_make") if metadata else None,
+                            metadata.get("camera_model") if metadata else None,
+                            metadata.get("gps_lat") if metadata else None,
+                            metadata.get("gps_lng") if metadata else None,
+                            created_at_ms,
+                        ),
+                    )
+                    if media_type == "photo":
+                        extra_metadata = metadata.get("extra_metadata", {}) if metadata else {}
+                        for key, value in extra_metadata.items():
+                            await db.execute(
+                                """
+                                INSERT OR REPLACE INTO media_metadata (media_id, key, value)
+                                VALUES (?, ?, ?)
+                                """,
+                                (media_id, key, str(value)),
+                            )
+                    await db.commit()
+
+                async for db in get_db():
+                    if media_type == "video":
+                        await db.execute(
+                            """
+                            INSERT INTO videos (
+                                video_id, library_id, path, filename, media_type, file_size,
+                                mtime_ms, fingerprint, duration_ms, width, height,
+                                fps, video_codec, video_bitrate,
+                                audio_codec, audio_channels, audio_sample_rate,
+                                container_format, rotation,
+                                creation_time, camera_make, camera_model,
+                                gps_lat, gps_lng,
+                                status, progress, created_at_ms
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', 0, ?)
+                            """,
+                            (
+                                media_id,
+                                library_id,
+                                path_str,
+                                media_path.name,
+                                media_type,
+                                stat.st_size,
+                                int(stat.st_mtime * 1000),
+                                fingerprint,
+                                metadata.get("duration_ms") if metadata else None,
+                                metadata.get("width") if metadata else None,
+                                metadata.get("height") if metadata else None,
+                                metadata.get("fps") if metadata else None,
+                                metadata.get("video_codec") if metadata else None,
+                                metadata.get("video_bitrate") if metadata else None,
+                                metadata.get("audio_codec") if metadata else None,
+                                metadata.get("audio_channels") if metadata else None,
+                                metadata.get("audio_sample_rate") if metadata else None,
+                                metadata.get("container_format") if metadata else None,
+                                metadata.get("rotation", 0) if metadata else 0,
+                                metadata.get("creation_time") if metadata else None,
+                                metadata.get("camera_make") if metadata else None,
+                                metadata.get("camera_model") if metadata else None,
+                                metadata.get("gps_lat") if metadata else None,
+                                metadata.get("gps_lng") if metadata else None,
+                                created_at_ms,
+                            ),
+                        )
+                    else:
+                        await db.execute(
+                            """
+                            INSERT INTO videos (
+                                video_id, library_id, path, filename, media_type, file_size,
+                                mtime_ms, fingerprint, duration_ms, width, height,
+                                fps, video_codec, video_bitrate,
+                                audio_codec, audio_channels, audio_sample_rate,
+                                container_format, rotation,
+                                creation_time, camera_make, camera_model,
+                                gps_lat, gps_lng,
+                                status, progress, created_at_ms
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, ?, ?, ?, ?, ?, 'QUEUED', 0, ?)
+                            """,
+                            (
+                                media_id,
+                                library_id,
+                                path_str,
+                                media_path.name,
+                                media_type,
+                                stat.st_size,
+                                int(stat.st_mtime * 1000),
+                                fingerprint,
+                                metadata.get("width") if metadata else None,
+                                metadata.get("height") if metadata else None,
+                                metadata.get("creation_time") if metadata else None,
+                                metadata.get("camera_make") if metadata else None,
+                                metadata.get("camera_model") if metadata else None,
+                                metadata.get("gps_lat") if metadata else None,
+                                metadata.get("gps_lng") if metadata else None,
+                                created_at_ms,
+                            ),
+                        )
+                    await db.commit()
+
+                if media_type == "video":
+                    extra_metadata = metadata.get("extra_metadata", {}) if metadata else {}
+                    async for db in get_db():
                         for key, value in extra_metadata.items():
                             await db.execute(
                                 """
                                 INSERT OR REPLACE INTO video_metadata (video_id, key, value)
                                 VALUES (?, ?, ?)
                                 """,
-                                (video_id, key, str(value) if value else None),
+                                (media_id, key, str(value) if value else None),
                             )
-
                         await db.commit()
-                    logger.info(f"Updated changed video: {video_path.name} (codec: {metadata.get('video_codec')})")
-            else:
-                # New video - extract metadata with ffprobe
-                stats["files_new"] += 1
-                video_id = str(uuid.uuid4())
-                created_at_ms = int(datetime.now().timestamp() * 1000)
 
-                # Extract comprehensive metadata
-                metadata = await get_video_metadata(video_path)
-
-                async for db in get_db():
-                    await db.execute(
-                        """
-                        INSERT INTO videos (
-                            video_id, library_id, path, filename, file_size,
-                            mtime_ms, fingerprint, duration_ms, width, height,
-                            fps, video_codec, video_bitrate,
-                            audio_codec, audio_channels, audio_sample_rate,
-                            container_format, rotation,
-                            creation_time, camera_make, camera_model,
-                            gps_lat, gps_lng,
-                            status, progress, created_at_ms
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', 0, ?)
-                        """,
-                        (
-                            video_id,
-                            library_id,
-                            path_str,
-                            video_path.name,
-                            stat.st_size,
-                            int(stat.st_mtime * 1000),
-                            fingerprint,
-                            metadata.get("duration_ms"),
-                            metadata.get("width"),
-                            metadata.get("height"),
-                            metadata.get("fps"),
-                            metadata.get("video_codec"),
-                            metadata.get("video_bitrate"),
-                            metadata.get("audio_codec"),
-                            metadata.get("audio_channels"),
-                            metadata.get("audio_sample_rate"),
-                            metadata.get("container_format"),
-                            metadata.get("rotation", 0),
-                            metadata.get("creation_time"),
-                            metadata.get("camera_make"),
-                            metadata.get("camera_model"),
-                            metadata.get("gps_lat"),
-                            metadata.get("gps_lng"),
-                            created_at_ms,
-                        ),
+                if media_type == "video":
+                    logger.info(
+                        f"Added new video: {media_path.name} (duration: {metadata.get('duration_ms')}ms)"
                     )
-
-                    # Store extra metadata in video_metadata table
-                    extra_metadata = metadata.get("extra_metadata", {})
-                    for key, value in extra_metadata.items():
-                        await db.execute(
-                            """
-                            INSERT OR REPLACE INTO video_metadata (video_id, key, value)
-                            VALUES (?, ?, ?)
-                            """,
-                            (video_id, key, str(value) if value else None),
-                        )
-
-                    await db.commit()
-                logger.info(f"Added new video: {video_path.name} (duration: {metadata.get('duration_ms')}ms, codec: {metadata.get('video_codec')})")
-
+                else:
+                    logger.info(f"Added new photo: {media_path.name}")
         except Exception as e:
-            logger.warning(f"Failed to process {video_path}: {e}")
+            logger.warning(f"Failed to process {media_path}: {e}")
 
         # Emit progress every 10 files or on new/changed
         if stats["files_found"] % 10 == 0 or stats["files_new"] > 0 or stats["files_changed"] > 0:
@@ -252,14 +513,15 @@ async def scan_library(library_id: str, folder_path: str, recursive: bool = True
                 files_deleted=stats["files_deleted"],
             )
 
-    # Check for deleted videos
-    for path_str, (video_id, _) in existing_videos.items():
+    # Check for deleted media
+    for path_str, (media_id, media_type, _) in existing_media.items():
         if path_str not in seen_paths:
             stats["files_deleted"] += 1
             async for db in get_db():
-                await db.execute("DELETE FROM videos WHERE video_id = ?", (video_id,))
+                await db.execute("DELETE FROM media WHERE media_id = ?", (media_id,))
+                await db.execute("DELETE FROM videos WHERE video_id = ?", (media_id,))
                 await db.commit()
-            logger.info(f"Removed deleted video: {Path(path_str).name}")
+            logger.info(f"Removed deleted {media_type}: {Path(path_str).name}")
 
     logger.info(
         f"Scan complete for library {library_id}: "

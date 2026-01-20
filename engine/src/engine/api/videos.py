@@ -111,20 +111,20 @@ async def list_videos(
     """List videos with filtering."""
     async for db in get_db():
         # Build query
-        conditions = []
-        params: list[str | int] = []
+        conditions = ["v.media_type = ?"]
+        params: list[str | int] = ["video"]
 
         if library_id:
-            conditions.append("library_id = ?")
+            conditions.append("v.library_id = ?")
             params.append(library_id)
         if status:
-            conditions.append("status = ?")
+            conditions.append("v.status = ?")
             params.append(status)
 
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
         # Get total count
-        count_query = f"SELECT COUNT(*) FROM videos {where_clause}"
+        count_query = f"SELECT COUNT(*) FROM videos v {where_clause}"
         cursor = await db.execute(count_query, params)
         row = await cursor.fetchone()
         total = row[0] if row else 0
@@ -143,7 +143,7 @@ async def list_videos(
                 v.created_at_ms, v.indexed_at_ms,
                 (SELECT f.thumbnail_path FROM frames f WHERE f.video_id = v.video_id ORDER BY f.frame_index ASC LIMIT 1) as thumbnail_path
             FROM videos v
-            {where_clause.replace('library_id', 'v.library_id').replace('status', 'v.status') if where_clause else ''}
+            {where_clause}
             ORDER BY v.created_at_ms DESC
             LIMIT ? OFFSET ?
         """
@@ -205,7 +205,7 @@ async def get_video(video_id: str, _token: str = Depends(verify_token)) -> Video
                 v.created_at_ms, v.indexed_at_ms,
                 (SELECT f.thumbnail_path FROM frames f WHERE f.video_id = v.video_id ORDER BY f.frame_index ASC LIMIT 1) as thumbnail_path
             FROM videos v
-            WHERE v.video_id = ?
+            WHERE v.video_id = ? AND v.media_type = 'video'
             """,
             (video_id,),
         )

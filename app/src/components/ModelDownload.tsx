@@ -10,6 +10,7 @@ interface ModelDownloadProgress {
 interface ModelDownloadProps {
   missingModels: string[];
   wsDownloads?: Map<string, ModelDownloadProgress>;
+  offlineMode?: boolean;
 }
 
 interface ModelInfo {
@@ -63,7 +64,7 @@ const MODELS: ModelInfo[] = [
   },
 ];
 
-export function ModelDownload({ missingModels, wsDownloads }: ModelDownloadProps) {
+export function ModelDownload({ missingModels, wsDownloads, offlineMode = false }: ModelDownloadProps) {
   const [downloading, setDownloading] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState<Record<string, number>>({});
   const [completed, setCompleted] = useState<string[]>([]);
@@ -140,17 +141,23 @@ export function ModelDownload({ missingModels, wsDownloads }: ModelDownloadProps
   }, [downloading, pollProgress]);
 
   const downloadModel = async (modelId: string) => {
+    if (offlineMode) {
+      setError("Offline mode is enabled. Disable it in Settings to download models.");
+      return;
+    }
     setError(null);
     setProgress((p) => ({ ...p, [modelId]: 0 }));
 
     try {
       const { apiRequest } = await import("../lib/apiClient");
-      const data = await apiRequest<{ status: string }>("/models", {
+      const data = await apiRequest<{ status: string; error?: string }>("/models", {
         method: "POST",
         body: JSON.stringify({ model: modelId }),
       });
 
-      if (data.status === "already_downloaded") {
+      if (data.status === "error") {
+        setError(data.error || "Download blocked");
+      } else if (data.status === "already_downloaded") {
         setCompleted((c) => [...c, modelId]);
         setProgress((p) => ({ ...p, [modelId]: 100 }));
       } else if (data.status === "started" || data.status === "downloading") {
@@ -162,6 +169,10 @@ export function ModelDownload({ missingModels, wsDownloads }: ModelDownloadProps
   };
 
   const downloadAll = async () => {
+    if (offlineMode) {
+      setError("Offline mode is enabled. Disable it in Settings to download models.");
+      return;
+    }
     for (const model of MODELS) {
       if (missingModels.includes(model.id) && !completed.includes(model.id)) {
         await downloadModel(model.id);
@@ -175,6 +186,11 @@ export function ModelDownload({ missingModels, wsDownloads }: ModelDownloadProps
 
   return (
     <div className="model-download">
+      {offlineMode && (
+        <div className="model-alert">
+          Offline mode is enabled. Disable it in Settings to download models.
+        </div>
+      )}
       <div className="model-grid">
         {MODELS.map((model, index) => {
           const isDownloading = downloading.has(model.id);
@@ -225,7 +241,7 @@ export function ModelDownload({ missingModels, wsDownloads }: ModelDownloadProps
                     <button
                       className="btn btn-secondary"
                       onClick={() => downloadModel(model.id)}
-                      disabled={anyDownloading}
+                      disabled={anyDownloading || offlineMode}
                       style={{ padding: "8px 16px", fontSize: "13px" }}
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -254,7 +270,7 @@ export function ModelDownload({ missingModels, wsDownloads }: ModelDownloadProps
           <button
             className="btn btn-primary"
             onClick={downloadAll}
-            disabled={anyDownloading}
+            disabled={anyDownloading || offlineMode}
           >
             {anyDownloading ? (
               <>

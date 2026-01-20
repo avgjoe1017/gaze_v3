@@ -23,6 +23,7 @@ JobStatus = Literal[
     "EXTRACTING_FRAMES",
     "EMBEDDING",
     "DETECTING",
+    "DETECTING_FACES",
     "DONE",
     "FAILED",
     "CANCELLED",
@@ -152,8 +153,16 @@ async def cancel_job(job_id: str, _token: str = Depends(verify_token)) -> dict[s
         await db.execute(
             """
             UPDATE videos
-            SET status = 'CANCELLED'
+            SET status = 'CANCELLED', error_code = 'CANCELLED', error_message = 'Cancelled by user'
             WHERE video_id = ?
+            """,
+            (video_id,),
+        )
+        await db.execute(
+            """
+            UPDATE media
+            SET status = 'CANCELLED', error_code = 'CANCELLED', error_message = 'Cancelled by user'
+            WHERE media_id = ?
             """,
             (video_id,),
         )
