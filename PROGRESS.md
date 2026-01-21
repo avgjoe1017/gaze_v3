@@ -2176,3 +2176,63 @@ Reordered the indexing flow so audio extraction + transcription run quietly afte
 
 ### Files Modified
 - `engine/src/engine/core/indexer.py`
+
+---
+
+## 2026-01-21 - Desktop Engine Hardening + UI View Modes + Library/Result Actions
+
+**Time:** Implementation session
+
+### Summary
+Hardened Tauri engine lifecycle/auth and expanded the media browser UI with view modes, grouped facets, and actionable library/result controls. Added local persistence for tags/favorites and fixed face/person routing order.
+
+### Changes
+
+#### Desktop / Engine Integration
+- **Shutdown now authenticated**: `/shutdown` requires bearer token; Tauri sends token when stopping engine.
+- **Graceful shutdown path**: exposed lifecycle manager on `app.state` and triggered cleanup on shutdown.
+- **Start guard**: `start_engine` returns existing port when already running/starting to prevent double-spawn.
+- **Token handling**: URL-safe tokens, cleared on stop; API cache cleared on start/stop; 401 triggers token refresh retry.
+- **WebSocket auth**: token passed via subprotocol; server parses multiple protocols properly.
+
+#### UI – Media Browser & Filters
+- Added **view modes** (small thumbnails / large thumbnails / detailed list) with new list metadata blocks.
+- Added **sort control** and search results “Sort: Relevance” indicator.
+- Rebuilt filters into **faceted groups** (Search in / Media / Other) with **Clear filters** action.
+- Collapsed hero into a **compact header** once libraries/results exist; added “Why private?” toggle to reveal cards.
+- Added **match source labels** per result/moment (e.g., “Matched in transcript”).
+- Adjusted copy: “Sync Files” → “Scan for new files”; privacy line to “No uploads. Nothing leaves your device. No model training.”
+- Increased contrast for library meta + detail labels; reduced grain intensity.
+
+#### Library & Result Actions
+- Library rows now show **progress ring + tiny progress bar + last scanned** (tracked from scan events; stored in localStorage).
+- Added library hover actions: **Rename / Rescan / Remove**.
+- Added result/media quick actions: **Open file / Open folder / Copy path / Add tag / Favorite**.
+- Tags + favorites are **local-only** (localStorage).
+- Open/copy actions **resolve paths lazily** via `/videos/{id}` (for search results).
+
+#### Backend & Contracts
+- Added `PATCH /libraries/{id}` for renaming libraries; updated OpenAPI.
+- **Faces route order** fixed: `/faces/persons` now registered before `/{face_id}` to prevent 404.
+
+#### Bug Fixes
+- Converted `getLibraryScan` and `getLibraryName` to function declarations to avoid temporal dead zone errors.
+
+### Files Modified
+- `app/src/components/MainView.tsx`
+- `app/src/styles.css`
+- `app/src/App.tsx`
+- `app/src/hooks/useEngine.ts`
+- `app/src/hooks/useWebSocket.ts`
+- `app/src/lib/apiClient.ts`
+- `app/src-tauri/src/engine.rs`
+- `engine/src/engine/api/health.py`
+- `engine/src/engine/core/lifecycle.py`
+- `engine/src/engine/main.py`
+- `engine/src/engine/ws/handler.py`
+- `engine/src/engine/api/libraries.py`
+- `engine/src/engine/api/faces.py`
+- `contracts/openapi.yaml`
+
+### Notes
+- “Open file/folder” actions are **desktop-only** (Tauri). They are disabled in browser mode.
