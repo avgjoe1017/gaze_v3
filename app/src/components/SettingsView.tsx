@@ -5,6 +5,7 @@ interface SettingsData {
   max_concurrent_jobs: number;
   thumbnail_quality: number;
   frame_interval_seconds: number;
+  indexing_preset: string;
   transcription_model: string;
   transcription_language: string | null;
   transcription_backend: string;
@@ -65,6 +66,7 @@ export function SettingsView({ settings, loading, onRefresh, onUpdate }: Setting
   const [restoreMode, setRestoreMode] = useState<"merge" | "replace">("merge");
   const [restoreStatus, setRestoreStatus] = useState<string | null>(null);
 
+  const indexingPreset = settings?.indexing_preset ?? "deep";
   const numericDraft = useMemo(() => ({
     max_concurrent_jobs: settings?.max_concurrent_jobs ?? 2,
     frame_interval_seconds: settings?.frame_interval_seconds ?? 2,
@@ -227,6 +229,19 @@ export function SettingsView({ settings, loading, onRefresh, onUpdate }: Setting
 
         <div className="settings-card">
           <h3>Indexing Performance</h3>
+          <div className="setting-row input-row">
+            <div>
+              <div className="setting-label">Indexing Preset</div>
+              <div className="setting-description">Quick skips transcription and detections; Deep runs full analysis.</div>
+            </div>
+            <select
+              value={indexingPreset}
+              onChange={(e) => handleUpdate({ indexing_preset: e.target.value })}
+            >
+              <option value="quick">Quick</option>
+              <option value="deep">Deep</option>
+            </select>
+          </div>
           <div className="setting-row input-row">
             <div>
               <div className="setting-label">Max Concurrent Jobs</div>

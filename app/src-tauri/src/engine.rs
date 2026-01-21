@@ -1,4 +1,4 @@
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::process::{Child, Command, Stdio};
@@ -77,7 +77,7 @@ fn find_available_port() -> Result<u16, String> {
 fn generate_token() -> String {
     let mut rng = rand::thread_rng();
     let bytes: [u8; 32] = rng.gen();
-    STANDARD.encode(bytes)
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 /// Get the path to the Python engine module (for development mode)
@@ -203,10 +203,10 @@ pub async fn start_engine(
     app: AppHandle,
     state: State<'_, EngineState>,
 ) -> Result<u16, String> {
-    // Check if already running
+    // Check if already running or starting
     {
         let status = state.status.lock().unwrap();
-        if *status == EngineStatus::Running {
+        if *status == EngineStatus::Running || *status == EngineStatus::Starting {
             let port = *state.port.lock().unwrap();
             return Ok(port);
         }
@@ -230,20 +230,30 @@ pub async fn start_engine(
 
     // In release builds, use the bundled sidecar binary
     // In debug builds, use Python directly for easier development
-    let process = if cfg!(debug_assertions) {
+    let process_result = if cfg!(debug_assertions) {
         // Development mode: always use Python
-        spawn_python_engine(port, &token, &parent_pid, log_level)?
+        spawn_python_engine(port, &token, &parent_pid, log_level)
     } else {
         // Release mode: try sidecar first, fall back to Python
         match spawn_sidecar_engine(&app, port, &token, &parent_pid, log_level) {
-            Ok(process) => process,
+            Ok(process) => Ok(process),
             Err(sidecar_err) => {
                 eprintln!(
                     "Sidecar not found, falling back to Python: {}",
                     sidecar_err
                 );
-                spawn_python_engine(port, &token, &parent_pid, log_level)?
+                spawn_python_engine(port, &token, &parent_pid, log_level)
             }
+        }
+    };
+
+    let process = match process_result {
+        Ok(process) => process,
+        Err(err) => {
+            *state.status.lock().unwrap() = EngineStatus::Error;
+            *state.process.lock().unwrap() = None;
+            *state.token.lock().unwrap() = String::new();
+            return Err(err);
         }
     };
 
@@ -259,14 +269,17 @@ pub async fn start_engine(
 #[tauri::command]
 pub async fn stop_engine(state: State<'_, EngineState>) -> Result<(), String> {
     let port = *state.port.lock().unwrap();
+    let token = state.token.lock().unwrap().clone();
 
     // Try graceful shutdown first via HTTP
     let client = reqwest::Client::new();
-    let _ = client
+    let mut request = client
         .post(format!("http://127.0.0.1:{}/shutdown", port))
-        .timeout(Duration::from_secs(3))
-        .send()
-        .await;
+        .timeout(Duration::from_secs(3));
+    if !token.is_empty() {
+        request = request.bearer_auth(token);
+    }
+    let _ = request.send().await;
 
     // Wait a bit for graceful shutdown
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -277,6 +290,7 @@ pub async fn stop_engine(state: State<'_, EngineState>) -> Result<(), String> {
     }
 
     *state.status.lock().unwrap() = EngineStatus::Stopped;
+    *state.token.lock().unwrap() = String::new();
 
     Ok(())
 }

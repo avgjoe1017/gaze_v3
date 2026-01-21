@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { clearApiCache } from "../lib/apiClient";
 
 // Check if we're running in Tauri
 const isTauri = typeof window !== "undefined" && "__TAURI__" in window;
@@ -69,6 +70,7 @@ export function useEngine() {
       }
 
       setState((s) => ({ ...s, port }));
+      clearApiCache();
 
       // Poll for health with exponential backoff
       let delay = 100;
@@ -102,6 +104,7 @@ export function useEngine() {
         console.error("Failed to stop engine:", err);
       }
     }
+    clearApiCache();
     setState((s) => ({ ...s, status: "disconnected", health: null }));
   }, []);
 

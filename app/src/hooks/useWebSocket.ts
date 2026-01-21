@@ -125,15 +125,12 @@ export function useWebSocket({ port, enabled = true }: UseWebSocketOptions) {
       }
     }
 
-    // Build WebSocket URL with token in query string
-    let wsUrl = `ws://127.0.0.1:${port}/ws`;
-    if (token) {
-      // Use query string as fallback (protocol header not easily set in browser API)
-      wsUrl += `?token=${encodeURIComponent(token)}`;
-    }
+    // Build WebSocket URL and pass token via subprotocol when available
+    const wsUrl = `ws://127.0.0.1:${port}/ws`;
+    const protocol = token ? `gaze-token.${token}` : undefined;
 
     try {
-      const ws = new WebSocket(wsUrl);
+      const ws = protocol ? new WebSocket(wsUrl, protocol) : new WebSocket(wsUrl);
 
       ws.onopen = () => {
         console.log("[WS] Connected");

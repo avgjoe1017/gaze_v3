@@ -3,11 +3,12 @@
 import asyncio
 import hashlib
 import json
+import zipfile
 from pathlib import Path
 from typing import Literal
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from ..db.connection import get_db
@@ -92,6 +93,15 @@ class DownloadModelResponse(BaseModel):
 
     status: Literal["started", "already_downloaded", "downloading", "error"]
     error: str | None = None
+
+
+class ModelPackImportResponse(BaseModel):
+    """Response after importing a model pack."""
+
+    status: Literal["ok", "partial", "error"]
+    imported: list[str]
+    skipped: list[str]
+    errors: list[str]
 
 
 async def download_model_task(model_name: str, max_retries: int = 3) -> None:
@@ -307,6 +317,118 @@ async def download_model(
     background_tasks.add_task(download_model_task, model_name)
 
     return DownloadModelResponse(status="started")
+
+
+@router.post("/import", response_model=ModelPackImportResponse)
+async def import_model_pack(
+    pack: UploadFile = File(...),
+    overwrite: bool = False,
+    _token: str = Depends(verify_token),
+) -> ModelPackImportResponse:
+    """Import a local model pack ZIP with checksum verification."""
+    if not pack.filename:
+        raise HTTPException(status_code=400, detail="Missing model pack file")
+
+    if not pack.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Model pack must be a .zip file")
+
+    models_dir = get_models_dir()
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    imported: list[str] = []
+    skipped: list[str] = []
+    errors: list[str] = []
+
+    try:
+        try:
+            pack.file.seek(0)
+        except Exception:
+            pass
+        with zipfile.ZipFile(pack.file) as zf:
+            if "manifest.json" not in zf.namelist():
+                raise HTTPException(status_code=400, detail="manifest.json missing from model pack")
+
+            manifest = json.loads(zf.read("manifest.json"))
+            if not isinstance(manifest, dict):
+                raise HTTPException(status_code=400, detail="Invalid manifest.json format")
+            entries = manifest.get("models")
+            if not isinstance(entries, list):
+                raise HTTPException(status_code=400, detail="Invalid manifest.json: missing models list")
+
+            for entry in entries:
+                model_id = entry.get("id")
+                sha256_expected = entry.get("sha256")
+                zip_path = entry.get("filename")
+
+                if not model_id or model_id not in MODEL_INFO:
+                    errors.append(f"Unknown model id: {model_id}")
+                    continue
+                if not sha256_expected:
+                    errors.append(f"Missing sha256 for {model_id}")
+                    continue
+
+                expected_filename = MODEL_INFO[model_id]["filename"]
+                if zip_path is None:
+                    zip_path = expected_filename
+
+                zip_path_obj = Path(zip_path)
+                if ".." in zip_path_obj.parts:
+                    errors.append(f"Unsafe path in manifest for {model_id}")
+                    continue
+
+                if zip_path not in zf.namelist():
+                    errors.append(f"Missing file for {model_id}: {zip_path}")
+                    continue
+
+                if expected_filename != zip_path_obj.name:
+                    errors.append(
+                        f"Filename mismatch for {model_id}: expected {expected_filename}, got {zip_path_obj.name}"
+                    )
+                    continue
+
+                if MODEL_INFO[model_id].get("sha256") and MODEL_INFO[model_id]["sha256"] != sha256_expected:
+                    errors.append(f"Checksum mismatch vs built-in SHA256 for {model_id}")
+                    continue
+
+                model_path = models_dir / expected_filename
+                if model_path.exists() and not overwrite:
+                    skipped.append(model_id)
+                    continue
+
+                temp_path = models_dir / f"{expected_filename}.tmp"
+                sha256 = hashlib.sha256()
+                with zf.open(zip_path) as src, open(temp_path, "wb") as dst:
+                    while True:
+                        chunk = src.read(65536)
+                        if not chunk:
+                            break
+                        sha256.update(chunk)
+                        dst.write(chunk)
+
+                if sha256.hexdigest() != sha256_expected:
+                    temp_path.unlink(missing_ok=True)
+                    errors.append(f"SHA256 mismatch for {model_id}")
+                    continue
+
+                temp_path.replace(model_path)
+                imported.append(model_id)
+                _download_errors.pop(model_id, None)
+
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Invalid model pack ZIP file")
+
+    status: Literal["ok", "partial", "error"] = "ok"
+    if errors and imported:
+        status = "partial"
+    elif errors and not imported:
+        status = "error"
+
+    return ModelPackImportResponse(
+        status=status,
+        imported=imported,
+        skipped=skipped,
+        errors=errors,
+    )
 
 
 @router.get("/{model_name}/progress")

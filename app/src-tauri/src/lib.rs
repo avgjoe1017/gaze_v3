@@ -9,6 +9,12 @@ pub fn run() {
         .setup(|app| {
             // Initialize engine state
             app.manage(engine::EngineState::new());
+            #[cfg(debug_assertions)]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    window.open_devtools();
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

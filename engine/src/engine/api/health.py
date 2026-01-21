@@ -5,10 +5,11 @@ import os
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from ..core.lifecycle import get_ffmpeg_status, get_gpu_status
+from ..middleware.auth import verify_token
 from ..utils.logging import get_logger
 from ..utils.paths import get_models_dir
 
@@ -105,14 +106,21 @@ async def get_health() -> HealthResponse:
 
 
 @router.post("/shutdown")
-async def shutdown() -> dict[str, str]:
+async def shutdown(
+    request: Request,
+    _token: str = Depends(verify_token),
+) -> dict[str, str]:
     """Initiate graceful shutdown."""
     logger.info("Shutdown requested")
 
     # Schedule shutdown after response
     async def delayed_shutdown() -> None:
         await asyncio.sleep(0.5)
-        os._exit(0)
+        lifecycle_manager = getattr(request.app.state, "lifecycle_manager", None)
+        if lifecycle_manager:
+            await lifecycle_manager.graceful_shutdown()
+        else:
+            os._exit(0)
 
     asyncio.create_task(delayed_shutdown())
     return {"status": "shutting_down"}

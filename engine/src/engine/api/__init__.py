@@ -1,6 +1,6 @@
 """API routes for Gaze Engine."""
 
-from . import health, models, libraries, videos, media, search, jobs, settings, logs, stats, faces, backup, network
+from . import health, models, libraries, videos, media, search, jobs, settings, logs, stats, faces, backup, network, maintenance
 
 __all__ = [
     "health",
@@ -16,4 +16,5 @@ __all__ = [
     "faces",
     "backup",
     "network",
+    "maintenance",
 ]

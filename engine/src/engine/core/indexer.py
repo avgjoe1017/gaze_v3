@@ -37,16 +37,19 @@ from ..ws.handler import emit_job_progress, emit_job_complete, emit_job_failed
 logger = get_logger(__name__)
 
 # Stage order for state machine
-VIDEO_STAGES = [
-    "EXTRACTING_AUDIO",
-    "TRANSCRIBING",
+VIDEO_PRIMARY_STAGES = [
     "EXTRACTING_FRAMES",
     "EMBEDDING",
     "DETECTING",
     "DETECTING_FACES",
 ]
 
-PHOTO_STAGES = [
+VIDEO_ENHANCED_STAGES = [
+    "EXTRACTING_AUDIO",
+    "TRANSCRIBING",
+]
+
+PHOTO_PRIMARY_STAGES = [
     "EXTRACTING_FRAMES",
     "EMBEDDING",
     "DETECTING",
@@ -55,6 +58,7 @@ PHOTO_STAGES = [
 
 # Track active indexing jobs
 _active_jobs: dict[str, asyncio.Task] = {}
+_active_enhanced_jobs: dict[str, asyncio.Task] = {}
 
 # Error codes with human-readable messages
 ERROR_CODES = {
@@ -122,6 +126,7 @@ async def get_indexer_settings() -> dict[str, object]:
         "thumbnail_quality": 85,
         "max_concurrent_jobs": 2,
         "face_recognition_enabled": False,
+        "indexing_preset": "deep",
     }
 
     keys = tuple(defaults.keys())
@@ -145,12 +150,32 @@ async def get_indexer_settings() -> dict[str, object]:
     return defaults
 
 
-def get_stage_list(media_type: str, face_recognition_enabled: bool) -> list[str]:
-    """Return indexing stages based on media type and settings."""
-    stages = VIDEO_STAGES if media_type == "video" else PHOTO_STAGES
+def get_primary_stage_list(media_type: str, face_recognition_enabled: bool, preset: str) -> list[str]:
+    """Return primary indexing stages based on media type and settings."""
+    preset = (preset or "deep").lower()
+    if media_type == "video":
+        if preset == "quick":
+            stages = ["EXTRACTING_FRAMES", "EMBEDDING"]
+        else:
+            stages = VIDEO_PRIMARY_STAGES
+    else:
+        if preset == "quick":
+            stages = ["EXTRACTING_FRAMES", "EMBEDDING"]
+        else:
+            stages = PHOTO_PRIMARY_STAGES
     if not face_recognition_enabled:
         stages = [stage for stage in stages if stage != "DETECTING_FACES"]
     return stages
+
+
+def get_enhanced_stage_list(media_type: str, preset: str) -> list[str]:
+    """Return enhanced indexing stages that run quietly after primary indexing."""
+    preset = (preset or "deep").lower()
+    if media_type != "video":
+        return []
+    if preset == "quick":
+        return []
+    return VIDEO_ENHANCED_STAGES
 
 
 async def update_video_and_media_state(
@@ -294,6 +319,11 @@ async def process_video(video_id: str) -> None:
     """Process a single video through all indexing stages."""
     logger.info(f"Starting indexing for video {video_id}")
 
+    # Cancel any pending enhanced work for this video
+    enhanced_task = _active_enhanced_jobs.pop(video_id, None)
+    if enhanced_task:
+        enhanced_task.cancel()
+
     # Get video info
     async for db in get_db():
         cursor = await db.execute(
@@ -316,7 +346,15 @@ async def process_video(video_id: str) -> None:
         media_type = row["media_type"] or "video"
 
     indexer_settings = await get_indexer_settings()
-    stages = get_stage_list(media_type, bool(indexer_settings.get("face_recognition_enabled")))
+    stages = get_primary_stage_list(
+        media_type,
+        bool(indexer_settings.get("face_recognition_enabled")),
+        str(indexer_settings.get("indexing_preset", "deep")),
+    )
+    enhanced_stages = get_enhanced_stage_list(
+        media_type,
+        str(indexer_settings.get("indexing_preset", "deep")),
+    )
 
     # Determine starting stage
     # Verify artifacts exist before resuming from a stage
@@ -324,38 +362,18 @@ async def process_video(video_id: str) -> None:
     if last_completed_stage:
         try:
             stage_index = stages.index(last_completed_stage)
-            if media_type == "photo":
+            if stages[stage_index] == "EXTRACTING_FRAMES":
                 thumbnails_dir = get_thumbnails_dir() / video_id
                 has_frames = any(thumbnails_dir.glob("frame_*.jpg"))
                 if has_frames:
                     start_from = stage_index + 1 if stage_index < len(stages) - 1 else len(stages)
                 else:
                     logger.warning(
-                        f"Photo thumbnails missing, restarting from EXTRACTING_FRAMES: {thumbnails_dir}"
+                        f"Thumbnails missing, restarting from EXTRACTING_FRAMES: {thumbnails_dir}"
                     )
                     start_from = 0
             else:
-                temp_dir = get_temp_dir()
-                if last_completed_stage == "EXTRACTING_AUDIO":
-                    audio_path = temp_dir / f"{video_id}.wav"
-                    if audio_path.exists() and audio_path.stat().st_size > 0:
-                        start_from = stage_index + 1
-                    else:
-                        logger.warning(
-                            f"Audio file missing or empty, restarting from EXTRACTING_AUDIO: {audio_path}"
-                        )
-                        start_from = 0
-                elif stage_index < len(stages) - 1:
-                    audio_path = temp_dir / f"{video_id}.wav"
-                    if audio_path.exists() and audio_path.stat().st_size > 0:
-                        start_from = stage_index + 1
-                    else:
-                        logger.warning(
-                            f"Audio file missing, restarting from EXTRACTING_AUDIO: {audio_path}"
-                        )
-                        start_from = 0
-                else:
-                    start_from = len(stages)
+                start_from = stage_index + 1 if stage_index < len(stages) - 1 else len(stages)
         except ValueError:
             start_from = 0
 
@@ -438,7 +456,7 @@ async def process_video(video_id: str) -> None:
             # Update progress
             await update_video_and_media_state(video_id, progress=progress)
 
-        # Mark as DONE
+        # Mark as DONE (primary indexing complete)
         indexed_at_ms = int(datetime.now().timestamp() * 1000)
         async for db in get_db():
             await db.execute(
@@ -455,6 +473,9 @@ async def process_video(video_id: str) -> None:
 
         await emit_job_complete(job_id=job_id, video_id=video_id)
         logger.info(f"Completed indexing for video {video_id}")
+
+        if enhanced_stages:
+            schedule_enhanced_indexing(video_id, video_path, enhanced_stages)
         
         # Auto-continue: check if we should start more videos
         # Only check if this was the last active job
@@ -1062,15 +1083,61 @@ async def auto_continue_indexing() -> None:
 async def stop_indexing(video_id: Optional[str] = None) -> dict:
     """Stop indexing for a specific video or all videos."""
     if video_id:
+        stopped: list[str] = []
         if video_id in _active_jobs:
             _active_jobs[video_id].cancel()
             del _active_jobs[video_id]
-            return {"stopped": [video_id]}
-        return {"stopped": []}
+            stopped.append(video_id)
+        if video_id in _active_enhanced_jobs:
+            _active_enhanced_jobs[video_id].cancel()
+            del _active_enhanced_jobs[video_id]
+            if video_id not in stopped:
+                stopped.append(video_id)
+        return {"stopped": stopped}
     else:
         # Cancel all
         for task in _active_jobs.values():
             task.cancel()
         stopped = list(_active_jobs.keys())
         _active_jobs.clear()
+        for task in _active_enhanced_jobs.values():
+            task.cancel()
+        stopped.extend(list(_active_enhanced_jobs.keys()))
+        _active_enhanced_jobs.clear()
         return {"stopped": stopped}
+
+
+async def _run_enhanced_indexing(
+    video_id: str,
+    video_path: Path,
+    stages: list[str],
+) -> None:
+    """Run enhanced indexing stages quietly in the background."""
+    try:
+        for stage in stages:
+            await process_stage(
+                video_id,
+                video_path,
+                stage,
+                job_id=None,
+                media_type="video",
+            )
+    except asyncio.CancelledError:
+        logger.info(f"Enhanced indexing cancelled for video {video_id}")
+    except Exception as e:
+        logger.warning(f"Enhanced indexing failed for video {video_id}: {e}")
+
+
+def schedule_enhanced_indexing(video_id: str, video_path: Path, stages: list[str]) -> None:
+    """Schedule enhanced indexing without blocking primary indexing."""
+    if not stages:
+        return
+    if video_id in _active_enhanced_jobs:
+        return
+    task = asyncio.create_task(_run_enhanced_indexing(video_id, video_path, stages))
+    _active_enhanced_jobs[video_id] = task
+
+    def cleanup(t: asyncio.Task) -> None:
+        _active_enhanced_jobs.pop(video_id, None)
+
+    task.add_done_callback(cleanup)

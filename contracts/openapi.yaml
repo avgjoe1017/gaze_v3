@@ -55,6 +55,37 @@ paths:
               schema:
                 $ref: "#/components/schemas/DownloadModelResponse"
 
+  /models/import:
+    post:
+      operationId: importModelPack
+      summary: Import an offline model pack ZIP
+      parameters:
+        - name: overwrite
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - pack
+              properties:
+                pack:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: Model pack import result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelPackImportResponse"
+
   /models/{model_name}/progress:
     get:
       operationId: getModelDownloadProgress
@@ -85,6 +116,18 @@ paths:
                     type: string
         "404":
           description: Model not found
+
+  /maintenance/wipe-derived:
+    post:
+      operationId: wipeDerivedData
+      summary: Wipe derived indexing data and reset indexing state
+      responses:
+        "200":
+          description: Wipe result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WipeDerivedDataResponse"
 
   /libraries:
     get:
@@ -127,6 +170,28 @@ paths:
       responses:
         "200":
           description: Library details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Library"
+    patch:
+      operationId: updateLibrary
+      summary: Update library metadata
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateLibraryRequest"
+      responses:
+        "200":
+          description: Updated library
           content:
             application/json:
               schema:
@@ -1067,6 +1132,12 @@ components:
           type: boolean
           default: true
 
+    UpdateLibraryRequest:
+      type: object
+      properties:
+        name:
+          type: string
+
     ScanResponse:
       type: object
       required:
@@ -1362,6 +1433,9 @@ components:
           type: integer
         frame_interval_seconds:
           type: number
+        indexing_preset:
+          type: string
+          enum: [quick, deep]
         transcription_model:
           type: string
         transcription_language:
@@ -1392,6 +1466,9 @@ components:
           type: integer
         frame_interval_seconds:
           type: number
+        indexing_preset:
+          type: string
+          enum: [quick, deep]
         transcription_model:
           type: string
         transcription_language:
@@ -1452,6 +1529,52 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/NetworkRequestEntry"
+
+    ModelPackImportResponse:
+      type: object
+      required:
+        - status
+        - imported
+        - skipped
+        - errors
+      properties:
+        status:
+          type: string
+          enum: [ok, partial, error]
+        imported:
+          type: array
+          items:
+            type: string
+        skipped:
+          type: array
+          items:
+            type: string
+        errors:
+          type: array
+          items:
+            type: string
+
+    WipeDerivedDataResponse:
+      type: object
+      required:
+        - status
+        - cleared_rows
+        - cleared_files
+        - message
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        cleared_rows:
+          type: object
+          additionalProperties:
+            type: integer
+        cleared_files:
+          type: object
+          additionalProperties:
+            type: integer
+        message:
+          type: string
 
     BackupPayload:
       type: object

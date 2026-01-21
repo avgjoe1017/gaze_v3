@@ -113,6 +113,84 @@ const RetryIcon = () => (
   </svg>
 );
 
+const EditIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+  </svg>
+);
+
+const TrashIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    <path d="M10 11v6" />
+    <path d="M14 11v6" />
+    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+  </svg>
+);
+
+const GridSmallIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+    <rect x="3" y="3" width="7" height="7" rx="1.5" />
+    <rect x="14" y="3" width="7" height="7" rx="1.5" />
+    <rect x="3" y="14" width="7" height="7" rx="1.5" />
+    <rect x="14" y="14" width="7" height="7" rx="1.5" />
+  </svg>
+);
+
+const GridLargeIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+    <rect x="3" y="3" width="18" height="8" rx="2" />
+    <rect x="3" y="13" width="18" height="8" rx="2" />
+  </svg>
+);
+
+const ListIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+    <line x1="6" y1="6" x2="21" y2="6" />
+    <line x1="6" y1="12" x2="21" y2="12" />
+    <line x1="6" y1="18" x2="21" y2="18" />
+    <circle cx="3" cy="6" r="1" fill="currentColor" stroke="none" />
+    <circle cx="3" cy="12" r="1" fill="currentColor" stroke="none" />
+    <circle cx="3" cy="18" r="1" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+const FileIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+    <polyline points="14 2 14 8 20 8" />
+  </svg>
+);
+
+const FolderOpenIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v1" />
+    <path d="M3 10h18a2 2 0 0 1 2 2l-2 7a2 2 0 0 1-2 1H5a2 2 0 0 1-2-2Z" />
+  </svg>
+);
+
+const CopyIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="9" y="9" width="13" height="13" rx="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </svg>
+);
+
+const TagIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M20 10l-8.5 8.5a2 2 0 0 1-2.8 0L4 13.8a2 2 0 0 1 0-2.8L12.2 2H20v8Z" />
+    <circle cx="16" cy="8" r="1.5" />
+  </svg>
+);
+
+const StarIcon = ({ filled = false }: { filled?: boolean }) => (
+  <svg viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <polygon points="12 2 15 9 22 9 16.5 14 18.5 22 12 17.5 5.5 22 7.5 14 2 9 9 9 12 2" />
+  </svg>
+);
+
 const PlayIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <polygon points="5 3 19 12 5 21 5 3" fill="currentColor" stroke="none" />
@@ -146,7 +224,11 @@ interface Library {
 
 interface Video {
   video_id: string;
+  library_id?: string;
+  path?: string;
   filename: string;
+  file_size?: number | null;
+  created_at_ms?: number;
   duration_ms?: number;
   status: string;
   progress: number;
@@ -194,6 +276,7 @@ type SearchMode = "all" | "transcript" | "visual" | "objects";
 const ALL_LIBRARIES_ID = "__all__";
 
 interface ScanProgressEvent {
+  type?: string;
   library_id: string;
   files_found: number;
   files_new: number;
@@ -378,7 +461,14 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [locationOnly, setLocationOnly] = useState(false);
+  const [viewMode, setViewMode] = useState<"grid-sm" | "grid-lg" | "list">("grid-lg");
+  const [sortMode, setSortMode] = useState<"newest" | "oldest">("newest");
+  const [showPrivacyPanel, setShowPrivacyPanel] = useState(false);
   const [activePhoto, setActivePhoto] = useState<MediaItem | null>(null);
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
+  const [mediaTags, setMediaTags] = useState<Record<string, string[]>>({});
+  const [lastScanTimes, setLastScanTimes] = useState<Record<string, number>>({});
+  const [libraryAction, setLibraryAction] = useState<{ id: string; action: "scan" | "rename" | "delete" } | null>(null);
   const [indexingStarting, setIndexingStarting] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [showStatusPanel, setShowStatusPanel] = useState(false);
@@ -407,6 +497,64 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
     }
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [showPersonPicker]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedFavorites = window.localStorage.getItem("gaze.favorites");
+    if (storedFavorites) {
+      try {
+        setFavoriteIds(new Set<string>(JSON.parse(storedFavorites)));
+      } catch {
+        setFavoriteIds(new Set());
+      }
+    }
+    const storedTags = window.localStorage.getItem("gaze.tags");
+    if (storedTags) {
+      try {
+        setMediaTags(JSON.parse(storedTags));
+      } catch {
+        setMediaTags({});
+      }
+    }
+    const storedScans = window.localStorage.getItem("gaze.lastScans");
+    if (storedScans) {
+      try {
+        setLastScanTimes(JSON.parse(storedScans));
+      } catch {
+        setLastScanTimes({});
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("gaze.favorites", JSON.stringify(Array.from(favoriteIds)));
+  }, [favoriteIds]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("gaze.tags", JSON.stringify(mediaTags));
+  }, [mediaTags]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("gaze.lastScans", JSON.stringify(lastScanTimes));
+  }, [lastScanTimes]);
+
+  useEffect(() => {
+    if (!scanProgress) return;
+    setLastScanTimes((prev) => {
+      let updated = false;
+      const next = { ...prev };
+      scanProgress.forEach((scan, libraryId) => {
+        if (scan && (scan as { type?: string }).type === "scan_complete") {
+          next[libraryId] = Date.now();
+          updated = true;
+        }
+      });
+      return updated ? next : prev;
+    });
+  }, [scanProgress]);
 
 
   // Fetch libraries on mount
@@ -681,6 +829,62 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
     }
   };
 
+  const handleScanLibrary = async (libraryId: string) => {
+    if (libraryId === ALL_LIBRARIES_ID) {
+      handleSyncLibrary();
+      return;
+    }
+    setLibraryAction({ id: libraryId, action: "scan" });
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      await apiRequest<{ status: string }>(`/libraries/${libraryId}/scan`, { method: "POST" });
+    } catch (err) {
+      console.error("Failed to scan library:", err);
+    } finally {
+      setLibraryAction(null);
+    }
+  };
+
+  const handleRenameLibrary = async (library: Library) => {
+    if (library.library_id === ALL_LIBRARIES_ID) return;
+    const currentName = library.name || getLibraryName(library);
+    const nextName = prompt("Rename library:", currentName);
+    if (!nextName) return;
+    const trimmed = nextName.trim();
+    if (!trimmed || trimmed === currentName) return;
+
+    setLibraryAction({ id: library.library_id, action: "rename" });
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      await apiRequest(`/libraries/${library.library_id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: trimmed }),
+      });
+      fetchLibraries();
+    } catch (err) {
+      console.error("Failed to rename library:", err);
+    } finally {
+      setLibraryAction(null);
+    }
+  };
+
+  const handleRemoveLibrary = async (library: Library) => {
+    if (library.library_id === ALL_LIBRARIES_ID) return;
+    const confirmed = confirm(`Remove "${getLibraryName(library)}"? This deletes its indexed data.`);
+    if (!confirmed) return;
+
+    setLibraryAction({ id: library.library_id, action: "delete" });
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      await apiRequest(`/libraries/${library.library_id}`, { method: "DELETE" });
+      fetchLibraries();
+    } catch (err) {
+      console.error("Failed to remove library:", err);
+    } finally {
+      setLibraryAction(null);
+    }
+  };
+
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmedQuery = searchQuery.trim();
@@ -788,8 +992,185 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
     return "Unknown date";
   };
 
+  const formatFileSize = (bytes?: number | null) => {
+    if (!bytes || bytes <= 0) return "—";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let size = bytes;
+    let unitIndex = 0;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex += 1;
+    }
+    const precision = size >= 100 || unitIndex === 0 ? 0 : size >= 10 ? 1 : 2;
+    return `${size.toFixed(precision)} ${units[unitIndex]}`;
+  };
+
+  const formatRelativeTime = (timestampMs?: number) => {
+    if (!timestampMs) return "Not scanned yet";
+    const diff = Date.now() - timestampMs;
+    if (diff < 60_000) return "Just now";
+    const minutes = Math.floor(diff / 60_000);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
+
+  const getMediaTimestamp = (item: MediaItem) => {
+    if (item.creation_time) {
+      const normalized = item.creation_time.replace(/^(\d{4}):(\d{2}):(\d{2})/, "$1-$2-$3");
+      const parsed = new Date(normalized);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.getTime();
+      }
+    }
+    if (item.mtime_ms) {
+      return item.mtime_ms;
+    }
+    return item.created_at_ms;
+  };
+
+  const sortedMediaItems = useMemo(() => {
+    if (!mediaItems.length) return mediaItems;
+    const items = [...mediaItems];
+    items.sort((a, b) => {
+      const delta = getMediaTimestamp(a) - getMediaTimestamp(b);
+      return sortMode === "oldest" ? delta : -delta;
+    });
+    return items;
+  }, [mediaItems, sortMode]);
+
+  const getMediaPath = useCallback(
+    (mediaId: string) => {
+      const media = mediaItems.find((item) => item.media_id === mediaId);
+      if (media?.path) return media.path;
+      const video = videos.find((item) => item.video_id === mediaId);
+      return video?.path ?? null;
+    },
+    [mediaItems, videos]
+  );
+
+  const resolveMediaPath = useCallback(
+    async (mediaId: string) => {
+      const cached = getMediaPath(mediaId);
+      if (cached) return cached;
+      try {
+        const { apiRequest } = await import("../lib/apiClient");
+        const data = await apiRequest<VideoDetails>(`/videos/${mediaId}`);
+        return data.path ?? null;
+      } catch (err) {
+        console.warn("Unable to resolve media path:", err);
+        return null;
+      }
+    },
+    [getMediaPath]
+  );
+
+  const getFolderPath = (path?: string | null) => {
+    if (!path) return null;
+    const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+    if (idx === -1) return null;
+    return path.slice(0, idx);
+  };
+
+  const handleOpenItem = async (mediaId: string, openFolder: boolean) => {
+    if (!isTauri) return;
+    const path = await resolveMediaPath(mediaId);
+    const target = openFolder ? getFolderPath(path) : path;
+    if (!target) {
+      console.warn("No path available to open");
+      return;
+    }
+    try {
+      const { open } = await import("@tauri-apps/plugin-shell");
+      await open(target);
+    } catch (err) {
+      console.error("Failed to open path:", err);
+    }
+  };
+
+  const handleCopyItemPath = async (mediaId: string) => {
+    const path = await resolveMediaPath(mediaId);
+    if (!path) return;
+    try {
+      await navigator.clipboard.writeText(path);
+    } catch (err) {
+      console.error("Failed to copy path:", err);
+    }
+  };
+
+  const handleAddTag = (mediaId: string) => {
+    const tag = prompt("Add a tag:");
+    if (!tag) return;
+    const normalized = tag.trim();
+    if (!normalized) return;
+    setMediaTags((prev) => {
+      const next = { ...prev };
+      const existing = new Set(next[mediaId] || []);
+      existing.add(normalized);
+      next[mediaId] = Array.from(existing);
+      return next;
+    });
+  };
+
+  const toggleFavorite = (mediaId: string) => {
+    setFavoriteIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(mediaId)) {
+        next.delete(mediaId);
+      } else {
+        next.add(mediaId);
+      }
+      return next;
+    });
+  };
+
   const filtersActive =
     mediaTypeFilter !== "all" || locationOnly || Boolean(dateFrom) || Boolean(dateTo);
+  const hasActiveFilters =
+    searchMode !== "all" ||
+    mediaTypeFilter !== "all" ||
+    locationOnly ||
+    Boolean(dateFrom) ||
+    Boolean(dateTo) ||
+    selectedPersons.length > 0;
+
+  const clearAllFilters = () => {
+    setSearchMode("all");
+    setMediaTypeFilter("all");
+    setLocationOnly(false);
+    setDateFrom("");
+    setDateTo("");
+    setSelectedPersons([]);
+  };
+
+  const showHero = libraries.length === 0 && mediaItems.length === 0 && !isSearching;
+  const activeLibrary = selectedLibrary
+    ? libraries.find((lib) => lib.library_id === selectedLibrary) ?? null
+    : null;
+  const totalIndexed = activeLibrary
+    ? activeLibrary.indexed_count
+    : libraries.reduce((sum, lib) => sum + lib.indexed_count, 0);
+  const totalItems = activeLibrary
+    ? activeLibrary.video_count
+    : libraries.reduce((sum, lib) => sum + lib.video_count, 0);
+  const activeScan = activeLibrary ? getLibraryScan(activeLibrary.library_id) : null;
+  const isActiveScanning = activeScan && (activeScan as { type?: string }).type !== "scan_complete";
+  const contextLibraryName =
+    activeLibrary ? getLibraryName(activeLibrary) : libraries.length > 0 ? "All libraries" : "Library";
+  const contextStatus = isActiveScanning
+    ? `Scanning... ${activeScan?.files_found || 0} files found`
+    : totalItems > 0
+      ? `Indexed ${totalIndexed}/${totalItems}`
+      : "Ready to scan";
+
+  const getMatchLabel = (result: SearchResult) => {
+    if (result.match_type === "both") return "Matched in transcript & visual";
+    if (result.match_type === "transcript") return "Matched in transcript";
+    if (result.match_type === "visual") return "Matched visually";
+    return "Matched";
+  };
 
   const formatTimestamp = (ms: number) => {
     const totalSeconds = Math.floor(ms / 1000);
@@ -802,14 +1183,14 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   };
 
-  const getLibraryName = (lib: Library) => {
+  function getLibraryName(lib: Library) {
     return lib.name || lib.folder_path.split(/[/\\]/).pop() || "Library";
-  };
+  }
 
-  const getLibraryScan = (libraryId: string) => {
+  function getLibraryScan(libraryId: string) {
     if (!scanProgress) return null;
     return scanProgress.get(libraryId);
-  };
+  }
 
   const resolveAssetUrl = useCallback(
     (path?: string | null) => {
@@ -958,6 +1339,16 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
             {libraries.map((lib) => {
               const scan = getLibraryScan(lib.library_id);
               const isScanning = scan && (scan as { type?: string }).type !== "scan_complete";
+              const progressRatio =
+                lib.video_count > 0 ? Math.min(1, lib.indexed_count / lib.video_count) : 0;
+              const progressPercent = Math.round(progressRatio * 100);
+              const ringRadius = 16;
+              const ringCircumference = 2 * Math.PI * ringRadius;
+              const ringDash = `${ringCircumference * progressRatio} ${ringCircumference}`;
+              const lastScanLabel = lastScanTimes[lib.library_id]
+                ? `Last scanned ${formatRelativeTime(lastScanTimes[lib.library_id])}`
+                : "Not scanned yet";
+              const busyAction = libraryAction && libraryAction.id === lib.library_id;
 
               return (
                 <div
@@ -966,17 +1357,75 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                   onClick={() => setSelectedLibrary(lib.library_id)}
                 >
                   <div className="library-icon">
+                    <svg className="library-progress-ring" viewBox="0 0 40 40" aria-hidden>
+                      <circle cx="20" cy="20" r={ringRadius} />
+                      <circle
+                        cx="20"
+                        cy="20"
+                        r={ringRadius}
+                        style={{ strokeDasharray: ringDash }}
+                      />
+                    </svg>
                     {isScanning ? <div className="spinner" style={{ width: 18, height: 18 }} /> : <FolderIcon />}
                   </div>
                   <div className="library-info">
                     <div className="library-name">{getLibraryName(lib)}</div>
                     <div className="library-meta">
-                      {isScanning
-                        ? `Scanning... ${scan?.files_found || 0} files found`
-                        : `${lib.indexed_count}/${lib.video_count} indexed items`
-                      }
+                      <span>
+                        {isScanning
+                          ? `Scanning... ${scan?.files_found || 0} files found`
+                          : `Indexed ${lib.indexed_count}/${lib.video_count}`
+                        }
+                      </span>
+                      <div className="library-progress">
+                        <div className="library-progress-bar">
+                          <div className="library-progress-fill" style={{ width: `${progressPercent}%` }} />
+                        </div>
+                        <span>{progressPercent}%</span>
+                      </div>
+                      {!isScanning && <span className="library-meta-sub">{lastScanLabel}</span>}
                     </div>
                   </div>
+                  {lib.library_id !== ALL_LIBRARIES_ID && (
+                    <div className="library-actions">
+                      <button
+                        className="btn-icon"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRenameLibrary(lib);
+                        }}
+                        disabled={busyAction}
+                        title="Rename"
+                        type="button"
+                      >
+                        <EditIcon />
+                      </button>
+                      <button
+                        className="btn-icon"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleScanLibrary(lib.library_id);
+                        }}
+                        disabled={busyAction}
+                        title="Rescan"
+                        type="button"
+                      >
+                        <RefreshIcon />
+                      </button>
+                      <button
+                        className="btn-icon danger"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveLibrary(lib);
+                        }}
+                        disabled={busyAction}
+                        title="Remove"
+                        type="button"
+                      >
+                        <TrashIcon />
+                      </button>
+                    </div>
+                  )}
                   <div className="library-badge">{isScanning ? scan?.files_new || 0 : lib.video_count}</div>
                 </div>
               );
@@ -1005,12 +1454,12 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
               {syncing ? (
                 <>
                   <div className="spinner" style={{ width: 16, height: 16 }} />
-                  Syncing...
+                  Scanning...
                 </>
               ) : (
                 <>
                   <RefreshIcon />
-                  Sync Files
+                  Scan for new files
                 </>
               )}
             </button>
@@ -1048,20 +1497,74 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
       <div className="content-area">
         {/* Search Section */}
         <div className="search-section">
-          <div className="welcome-row">
-            <div className="welcome-text">
-              <span className="welcome-kicker">Modern Family Library</span>
-              <h2>All your photos and videos, organized and searchable.</h2>
-              <p>
-                Everything stays on this device - no cloud uploads, no exposure, and no AI training.
-              </p>
-              <div className="welcome-pills">
-                <span>Local-only</span>
-                <span>Offline-first</span>
-                <span>Private by design</span>
+          {showHero ? (
+            <div className="welcome-row">
+              <div className="welcome-text">
+                <span className="welcome-kicker">Modern Family Library</span>
+                <h2>All your photos and videos, organized and searchable.</h2>
+                <p>
+                  No uploads. Nothing leaves your device. No model training.
+                </p>
+                <div className="welcome-pills">
+                  <span>Local-only</span>
+                  <span>Offline-first</span>
+                  <span>Private by design</span>
+                </div>
+              </div>
+              <div className="welcome-cards">
+                <div className="welcome-card">
+                  <div className="welcome-icon">
+                    <ShieldIcon />
+                  </div>
+                  <div>
+                    <h4>Private by default</h4>
+                    <p>No cloud copies. Nothing leaves your device.</p>
+                  </div>
+                </div>
+                <div className="welcome-card">
+                  <div className="welcome-icon">
+                    <UsersIcon />
+                  </div>
+                  <div>
+                    <h4>Family-ready</h4>
+                    <p>Keep everyone’s memories tidy and easy to find.</p>
+                  </div>
+                </div>
+                <div className="welcome-card">
+                  <div className="welcome-icon">
+                    <SearchIcon />
+                  </div>
+                  <div>
+                    <h4>Smart search</h4>
+                    <p>Find people, places, and moments instantly.</p>
+                  </div>
+                </div>
               </div>
             </div>
-            <div className="welcome-cards">
+          ) : (
+            <div className="context-row">
+              <div className="context-main">
+                <span className="welcome-kicker">{contextLibraryName}</span>
+                <h2>Ready for private search.</h2>
+                <p>No uploads. Nothing leaves your device. No model training.</p>
+              </div>
+              <div className="context-meta">
+                <div className="context-status">
+                  <span className="context-label">Status</span>
+                  <span className="context-value">{contextStatus}</span>
+                </div>
+                <button
+                  className="btn btn-ghost btn-small"
+                  onClick={() => setShowPrivacyPanel((prev) => !prev)}
+                  type="button"
+                >
+                  {showPrivacyPanel ? "Hide privacy details" : "Why private?"}
+                </button>
+              </div>
+            </div>
+          )}
+          {!showHero && showPrivacyPanel && (
+            <div className="welcome-cards compact">
               <div className="welcome-card">
                 <div className="welcome-icon">
                   <ShieldIcon />
@@ -1090,7 +1593,7 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                 </div>
               </div>
             </div>
-          </div>
+          )}
           <form onSubmit={handleSearch} className="search-container">
             <input
               type="text"
@@ -1102,143 +1605,217 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
             <SearchIcon className="search-icon" />
           </form>
 
-          <div className="filter-chips">
-            <button
-              className={`chip ${searchMode === "all" ? "active" : ""}`}
-              onClick={() => setSearchMode("all")}
-            >
-              All
-            </button>
-            <button
-              className={`chip ${searchMode === "transcript" ? "active" : ""}`}
-              onClick={() => setSearchMode("transcript")}
-            >
-              <MicIcon />
-              Transcript
-            </button>
-            <button
-              className={`chip ${searchMode === "visual" ? "active" : ""}`}
-              onClick={() => setSearchMode("visual")}
-            >
-              <ImageIcon />
-              Visual
-            </button>
-            <button
-              className={`chip ${searchMode === "objects" ? "active" : ""}`}
-              onClick={() => setSearchMode("objects")}
-            >
-              <BoxIcon />
-              Objects
-            </button>
-
-            {/* Person filter */}
-            {faceRecognitionEnabled && persons.length > 0 && (
-              <div className="person-filter-container" ref={personPickerRef}>
+          <div className="facet-bar">
+            <div className="facet-group">
+              <div className="facet-label">Search in</div>
+              <div className="facet-chips">
                 <button
-                  className={`chip ${selectedPersons.length > 0 ? "active" : ""}`}
-                  onClick={() => setShowPersonPicker(!showPersonPicker)}
+                  className={`chip ${searchMode === "all" ? "active" : ""}`}
+                  onClick={() => setSearchMode("all")}
+                  type="button"
                 >
-                  <UsersIcon />
-                  People {selectedPersons.length > 0 && `(${selectedPersons.length})`}
+                  Everything
                 </button>
-                {showPersonPicker && (
-                  <div className="person-picker-dropdown">
-                    <div className="person-picker-header">
-                      <span>Filter by person</span>
-                      {selectedPersons.length > 0 && (
-                        <button
-                          className="btn-link"
-                          onClick={() => setSelectedPersons([])}
-                        >
-                          Clear all
-                        </button>
-                      )}
-                    </div>
-                    <div className="person-picker-list">
-                      {persons.map((person) => (
-                        <label key={person.person_id} className="person-picker-item">
-                          <input
-                            type="checkbox"
-                            checked={selectedPersons.includes(person.person_id)}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setSelectedPersons([...selectedPersons, person.person_id]);
-                              } else {
-                                setSelectedPersons(selectedPersons.filter(id => id !== person.person_id));
+                <button
+                  className={`chip ${searchMode === "transcript" ? "active" : ""}`}
+                  onClick={() => setSearchMode("transcript")}
+                  type="button"
+                >
+                  <MicIcon />
+                  Transcript
+                </button>
+                <button
+                  className={`chip ${searchMode === "visual" ? "active" : ""}`}
+                  onClick={() => setSearchMode("visual")}
+                  type="button"
+                >
+                  <ImageIcon />
+                  Visual
+                </button>
+                <button
+                  className={`chip ${searchMode === "objects" ? "active" : ""}`}
+                  onClick={() => setSearchMode("objects")}
+                  type="button"
+                >
+                  <BoxIcon />
+                  Objects
+                </button>
+
+                {/* Person filter */}
+                {faceRecognitionEnabled && persons.length > 0 && (
+                  <div className="person-filter-container" ref={personPickerRef}>
+                    <button
+                      className={`chip ${selectedPersons.length > 0 ? "active" : ""}`}
+                      onClick={() => setShowPersonPicker(!showPersonPicker)}
+                      type="button"
+                    >
+                      <UsersIcon />
+                      Faces {selectedPersons.length > 0 && `(${selectedPersons.length})`}
+                    </button>
+                    {showPersonPicker && (
+                      <div className="person-picker-dropdown">
+                        <div className="person-picker-header">
+                          <span>Filter by person</span>
+                          {selectedPersons.length > 0 && (
+                            <button
+                              className="btn-link"
+                              onClick={() => setSelectedPersons([])}
+                              type="button"
+                            >
+                              Clear all
+                            </button>
+                          )}
+                        </div>
+                        <div className="person-picker-list">
+                          {persons.map((person) => (
+                            <label key={person.person_id} className="person-picker-item">
+                              <input
+                                type="checkbox"
+                                checked={selectedPersons.includes(person.person_id)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedPersons([...selectedPersons, person.person_id]);
+                                  } else {
+                                    setSelectedPersons(selectedPersons.filter(id => id !== person.person_id));
+                                  }
+                                }}
+                              />
+                              <span className="person-picker-name">{person.name}</span>
+                              <span className="person-picker-count">{person.face_count}</span>
+                            </label>
+                          ))}
+                        </div>
+                        <div className="person-picker-footer">
+                          <button
+                            className="btn btn-small btn-primary"
+                            onClick={() => {
+                              setShowPersonPicker(false);
+                              if (selectedPersons.length > 0 || searchQuery.trim()) {
+                                handleSearch({ preventDefault: () => {} } as React.FormEvent);
                               }
                             }}
-                          />
-                          <span className="person-picker-name">{person.name}</span>
-                          <span className="person-picker-count">{person.face_count}</span>
-                        </label>
-                      ))}
-                    </div>
-                    <div className="person-picker-footer">
-                      <button
-                        className="btn btn-small btn-primary"
-                        onClick={() => {
-                          setShowPersonPicker(false);
-                          if (selectedPersons.length > 0 || searchQuery.trim()) {
-                            handleSearch({ preventDefault: () => {} } as React.FormEvent);
-                          }
-                        }}
-                      >
-                        Apply Filter
-                      </button>
-                    </div>
+                            type="button"
+                          >
+                            Apply Filter
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-            )}
-            <div className="chip-group">
-              <button
-                className={`chip ${mediaTypeFilter === "all" ? "active" : ""}`}
-                onClick={() => setMediaTypeFilter("all")}
-                type="button"
-              >
-                Everything
-              </button>
-              <button
-                className={`chip ${mediaTypeFilter === "photo" ? "active" : ""}`}
-                onClick={() => setMediaTypeFilter("photo")}
-                type="button"
-              >
-                <ImageIcon />
-                Photos
-              </button>
-              <button
-                className={`chip ${mediaTypeFilter === "video" ? "active" : ""}`}
-                onClick={() => setMediaTypeFilter("video")}
-                type="button"
-              >
-                <FilmIcon />
-                Videos
-              </button>
             </div>
-          </div>
-          <div className="media-filters">
-            <div className="date-filter">
-              <label>
-                From
-                <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-              </label>
-              <label>
-                To
-                <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-              </label>
+
+            <div className="facet-group">
+              <div className="facet-label">Media</div>
+              <div className="facet-chips">
+                <button
+                  className={`chip ${mediaTypeFilter === "all" ? "active" : ""}`}
+                  onClick={() => setMediaTypeFilter("all")}
+                  type="button"
+                >
+                  All media
+                </button>
+                <button
+                  className={`chip ${mediaTypeFilter === "photo" ? "active" : ""}`}
+                  onClick={() => setMediaTypeFilter("photo")}
+                  type="button"
+                >
+                  <ImageIcon />
+                  Photos
+                </button>
+                <button
+                  className={`chip ${mediaTypeFilter === "video" ? "active" : ""}`}
+                  onClick={() => setMediaTypeFilter("video")}
+                  type="button"
+                >
+                  <FilmIcon />
+                  Videos
+                </button>
+              </div>
             </div>
-            <button
-              className={`chip ${locationOnly ? "active" : ""}`}
-              onClick={() => setLocationOnly(!locationOnly)}
-              type="button"
-            >
-              Location tagged
-            </button>
+
+            <div className="facet-group facet-group-wide">
+              <div className="facet-label">Other</div>
+              <div className="facet-chips">
+                <div className="date-filter">
+                  <label>
+                    From
+                    <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+                  </label>
+                  <label>
+                    To
+                    <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+                  </label>
+                </div>
+                <button
+                  className={`chip ${locationOnly ? "active" : ""}`}
+                  onClick={() => setLocationOnly(!locationOnly)}
+                  type="button"
+                >
+                  Location tagged
+                </button>
+                {hasActiveFilters && (
+                  <button
+                    className="clear-filters"
+                    onClick={clearAllFilters}
+                    type="button"
+                  >
+                    Clear filters
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
         {/* Video Grid / Search Results */}
         <div className="video-grid-container">
+          {!isSearching && mediaItems.length > 0 && (
+            <div className="view-toolbar">
+              <div className="view-toggle" role="group" aria-label="View mode">
+                <button
+                  className={`view-btn ${viewMode === "grid-sm" ? "active" : ""}`}
+                  onClick={() => setViewMode("grid-sm")}
+                  type="button"
+                  aria-pressed={viewMode === "grid-sm"}
+                  title="Small thumbnails"
+                >
+                  <GridSmallIcon />
+                </button>
+                <button
+                  className={`view-btn ${viewMode === "grid-lg" ? "active" : ""}`}
+                  onClick={() => setViewMode("grid-lg")}
+                  type="button"
+                  aria-pressed={viewMode === "grid-lg"}
+                  title="Large thumbnails"
+                >
+                  <GridLargeIcon />
+                </button>
+                <button
+                  className={`view-btn ${viewMode === "list" ? "active" : ""}`}
+                  onClick={() => setViewMode("list")}
+                  type="button"
+                  aria-pressed={viewMode === "list"}
+                  title="Detailed list"
+                >
+                  <ListIcon />
+                </button>
+              </div>
+              <div className="sort-control">
+                <span className="sort-label">Sort</span>
+                <select
+                  className="sort-select"
+                  value={sortMode}
+                  onChange={(e) => setSortMode(e.target.value as "newest" | "oldest")}
+                  aria-label="Sort media"
+                >
+                  <option value="newest">Newest first</option>
+                  <option value="oldest">Oldest first</option>
+                </select>
+              </div>
+            </div>
+          )}
           {isSearching ? (
             searchLoading ? (
               <div className="empty-state">
@@ -1256,11 +1833,18 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                     for "{searchQuery}"
                   </div>
                   )}
+                <div className="results-sort">
+                  <span className="results-sort-label">Sort</span>
+                  <span className="results-sort-pill">Relevance</span>
+                </div>
                 </div>
                 {groupedSearchResults.map((group) => {
                   const isExpanded = expandedVideos.has(group.video_id);
                   const hasMultipleMoments = group.moments.length > 1;
                   const bestMoment = group.moments[0];
+                  const matchLabel = getMatchLabel(bestMoment);
+                  const isFavorite = favoriteIds.has(group.video_id);
+                  const tags = mediaTags[group.video_id] || [];
 
                   return (
                     <div key={group.video_id} className="result-group">
@@ -1290,6 +1874,16 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                           <div className="result-video-title">
                             {group.filename}
                           </div>
+                          <div className="result-match">{matchLabel}</div>
+                          {tags.length > 0 && (
+                            <div className="result-user-tags">
+                              {tags.map((tag) => (
+                                <span key={tag} className="user-tag">
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                           {bestMoment.transcript_snippet && (
                             <div
                               className="result-snippet"
@@ -1316,29 +1910,90 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                           </div>
                         </div>
                         <div className="result-actions">
-                          <button
-                            className="btn-icon play-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openPlayer(group.video_id, bestMoment.timestamp_ms);
-                            }}
-                            title="Play"
-                          >
-                            <PlayIcon />
-                          </button>
-                          {hasMultipleMoments && (
+                          <div className="result-primary-actions">
                             <button
-                              className={`btn-icon expand-btn ${isExpanded ? "expanded" : ""}`}
+                              className="btn-icon play-btn"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                toggleVideoExpanded(group.video_id);
+                                openPlayer(group.video_id, bestMoment.timestamp_ms);
                               }}
-                              title={isExpanded ? "Collapse" : `Show all ${group.moments.length} moments`}
+                              title="Play"
                             >
-                              <span className="moment-count">{group.moments.length}</span>
-                              <ChevronDownIcon />
+                              <PlayIcon />
                             </button>
-                          )}
+                            {hasMultipleMoments && (
+                              <button
+                                className={`btn-icon expand-btn ${isExpanded ? "expanded" : ""}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleVideoExpanded(group.video_id);
+                                }}
+                                title={isExpanded ? "Collapse" : `Show all ${group.moments.length} moments`}
+                              >
+                                <span className="moment-count">{group.moments.length}</span>
+                                <ChevronDownIcon />
+                              </button>
+                            )}
+                          </div>
+                          <div className="result-quick-actions">
+                            <button
+                              className="btn-icon subtle"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenItem(group.video_id, false);
+                              }}
+                              disabled={!isTauri}
+                              title="Open file"
+                              type="button"
+                            >
+                              <FileIcon />
+                            </button>
+                            <button
+                              className="btn-icon subtle"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenItem(group.video_id, true);
+                              }}
+                              disabled={!isTauri}
+                              title="Open folder"
+                              type="button"
+                            >
+                              <FolderOpenIcon />
+                            </button>
+                            <button
+                              className="btn-icon subtle"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCopyItemPath(group.video_id);
+                              }}
+                              title="Copy path"
+                              type="button"
+                            >
+                              <CopyIcon />
+                            </button>
+                            <button
+                              className="btn-icon subtle"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleAddTag(group.video_id);
+                              }}
+                              title="Add tag"
+                              type="button"
+                            >
+                              <TagIcon />
+                            </button>
+                            <button
+                              className={`btn-icon subtle ${isFavorite ? "active" : ""}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleFavorite(group.video_id);
+                              }}
+                              title={isFavorite ? "Remove favorite" : "Favorite"}
+                              type="button"
+                            >
+                              <StarIcon filled={isFavorite} />
+                            </button>
+                          </div>
                         </div>
                       </div>
 
@@ -1368,6 +2023,7 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                                 <span className="moment-timestamp">
                                   {formatTimestamp(moment.timestamp_ms)}
                                 </span>
+                                <span className="moment-match">{getMatchLabel(moment)}</span>
                                 {moment.transcript_snippet && (
                                   <span
                                     className="moment-snippet"
@@ -1408,8 +2064,8 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
               <p>Loading your library...</p>
             </div>
           ) : mediaItems.length > 0 ? (
-            <div className="video-grid">
-              {mediaItems.map((item) => {
+            <div className={`video-grid view-${viewMode}`}>
+              {sortedMediaItems.map((item) => {
                 const isVideo = item.media_type === "video";
                 const video = isVideo ? videos.find((v) => v.video_id === item.media_id) : null;
                 const status = video?.status ?? item.status;
@@ -1420,6 +2076,9 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                 const camera = item.camera_make || item.camera_model
                   ? [item.camera_make, item.camera_model].filter(Boolean).join(" ")
                   : null;
+                const fileSize = formatFileSize(item.file_size);
+                const isFavorite = favoriteIds.has(item.media_id);
+                const tags = mediaTags[item.media_id] || [];
                 return (
                   <div
                     key={item.media_id}
@@ -1498,6 +2157,103 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                             <ImageIcon />
                             Photo
                           </span>
+                        )}
+                      </div>
+                      {tags.length > 0 && (
+                        <div className="media-tags">
+                          {tags.map((tag) => (
+                            <span key={tag} className="user-tag">
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="media-card-actions">
+                        <button
+                          className="btn-icon subtle"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenItem(item.media_id, false);
+                          }}
+                          disabled={!isTauri}
+                          title="Open file"
+                          type="button"
+                        >
+                          <FileIcon />
+                        </button>
+                        <button
+                          className="btn-icon subtle"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenItem(item.media_id, true);
+                          }}
+                          disabled={!isTauri}
+                          title="Open folder"
+                          type="button"
+                        >
+                          <FolderOpenIcon />
+                        </button>
+                        <button
+                          className="btn-icon subtle"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCopyItemPath(item.media_id);
+                          }}
+                          title="Copy path"
+                          type="button"
+                        >
+                          <CopyIcon />
+                        </button>
+                        <button
+                          className="btn-icon subtle"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleAddTag(item.media_id);
+                          }}
+                          title="Add tag"
+                          type="button"
+                        >
+                          <TagIcon />
+                        </button>
+                        <button
+                          className={`btn-icon subtle ${isFavorite ? "active" : ""}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleFavorite(item.media_id);
+                          }}
+                          title={isFavorite ? "Remove favorite" : "Favorite"}
+                          type="button"
+                        >
+                          <StarIcon filled={isFavorite} />
+                        </button>
+                      </div>
+                      <div className="media-details">
+                        <div className="detail-item">
+                          <span className="detail-label">Date</span>
+                          <span className="detail-value">{photoDate}</span>
+                        </div>
+                        <div className="detail-item">
+                          <span className="detail-label">Size</span>
+                          <span className="detail-value">{fileSize}</span>
+                        </div>
+                        <div className="detail-item">
+                          <span className="detail-label">Resolution</span>
+                          <span className="detail-value">{dimensions}</span>
+                        </div>
+                        <div className="detail-item">
+                          <span className="detail-label">Type</span>
+                          <span className="detail-value">{isVideo ? "Video" : "Photo"}</span>
+                        </div>
+                        {isVideo ? (
+                          <div className="detail-item">
+                            <span className="detail-label">Duration</span>
+                            <span className="detail-value">{formatDuration(duration)}</span>
+                          </div>
+                        ) : (
+                          <div className="detail-item">
+                            <span className="detail-label">Camera</span>
+                            <span className="detail-value">{camera ?? "—"}</span>
+                          </div>
                         )}
                       </div>
                     </div>

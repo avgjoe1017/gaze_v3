@@ -414,10 +414,10 @@ class LifecycleManager:
 
             if consecutive_failures >= max_failures:
                 logger.warning("Parent process dead, initiating shutdown")
-                await self._graceful_shutdown()
+                await self.graceful_shutdown()
                 break
 
-    async def _graceful_shutdown(self) -> None:
+    async def graceful_shutdown(self) -> None:
         """Initiate graceful shutdown."""
         logger.info("Graceful shutdown initiated")
         await self.shutdown()

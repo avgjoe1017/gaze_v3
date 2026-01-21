@@ -249,220 +249,6 @@ async def list_faces(
     return FacesResponse(faces=[], total=0)
 
 
-@router.get("/{face_id}", response_model=Face)
-async def get_face(
-    face_id: str,
-    _token: str = Depends(verify_token),
-) -> Face:
-    """Get a single face by ID."""
-    async for db in get_db():
-        cursor = await db.execute(
-            """
-            SELECT f.*, p.name as person_name
-            FROM faces f
-            LEFT JOIN persons p ON f.person_id = p.person_id
-            WHERE f.face_id = ?
-            """,
-            (face_id,),
-        )
-        row = await cursor.fetchone()
-
-        if not row:
-            raise HTTPException(status_code=404, detail="Face not found")
-
-        return Face(
-            face_id=row["face_id"],
-            video_id=row["video_id"],
-            frame_id=row["frame_id"],
-            timestamp_ms=row["timestamp_ms"],
-            bbox_x=row["bbox_x"],
-            bbox_y=row["bbox_y"],
-            bbox_w=row["bbox_w"],
-            bbox_h=row["bbox_h"],
-            confidence=row["confidence"],
-            crop_path=row["crop_path"],
-            age=row["age"],
-            gender=row["gender"],
-            person_id=row["person_id"],
-            person_name=row["person_name"],
-            cluster_id=row["cluster_id"],
-            created_at_ms=row["created_at_ms"],
-        )
-
-    raise HTTPException(status_code=404, detail="Face not found")
-
-
-@router.get("/{face_id}/similar", response_model=SimilarFacesResponse)
-async def find_similar_faces(
-    face_id: str,
-    threshold: float = Query(0.5, ge=0.0, le=1.0, description="Minimum similarity"),
-    limit: int = Query(20, ge=1, le=100),
-    _token: str = Depends(verify_token),
-) -> SimilarFacesResponse:
-    """Find faces similar to the given face."""
-    async for db in get_db():
-        # Get the source face embedding
-        cursor = await db.execute(
-            "SELECT embedding FROM faces WHERE face_id = ?",
-            (face_id,),
-        )
-        row = await cursor.fetchone()
-
-        if not row:
-            raise HTTPException(status_code=404, detail="Face not found")
-
-        source_embedding = bytes_to_embedding(row["embedding"])
-
-        # Get all other faces with embeddings
-        cursor = await db.execute(
-            """
-            SELECT f.*, p.name as person_name
-            FROM faces f
-            LEFT JOIN persons p ON f.person_id = p.person_id
-            WHERE f.face_id != ?
-            """,
-            (face_id,),
-        )
-        rows = await cursor.fetchall()
-
-        # Calculate similarities
-        results = []
-        for row in rows:
-            embedding = bytes_to_embedding(row["embedding"])
-            similarity = compute_face_similarity(source_embedding, embedding)
-
-            if similarity >= threshold:
-                results.append((row, similarity))
-
-        # Sort by similarity descending
-        results.sort(key=lambda x: x[1], reverse=True)
-        results = results[:limit]
-
-        faces = [
-            Face(
-                face_id=row["face_id"],
-                video_id=row["video_id"],
-                frame_id=row["frame_id"],
-                timestamp_ms=row["timestamp_ms"],
-                bbox_x=row["bbox_x"],
-                bbox_y=row["bbox_y"],
-                bbox_w=row["bbox_w"],
-                bbox_h=row["bbox_h"],
-                confidence=row["confidence"],
-                crop_path=row["crop_path"],
-                age=row["age"],
-                gender=row["gender"],
-                person_id=row["person_id"],
-                person_name=row["person_name"],
-                cluster_id=row["cluster_id"],
-                created_at_ms=row["created_at_ms"],
-            )
-            for row, _ in results
-        ]
-        similarities = [sim for _, sim in results]
-
-        return SimilarFacesResponse(faces=faces, similarities=similarities)
-
-    return SimilarFacesResponse(faces=[], similarities=[])
-
-
-@router.post("/{face_id}/assign")
-async def assign_face_to_person(
-    face_id: str,
-    request: AssignFaceRequest,
-    _token: str = Depends(verify_token),
-) -> dict:
-    """Assign a face to a person."""
-    async for db in get_db():
-        # Verify face exists
-        cursor = await db.execute(
-            "SELECT face_id FROM faces WHERE face_id = ?",
-            (face_id,),
-        )
-        if not await cursor.fetchone():
-            raise HTTPException(status_code=404, detail="Face not found")
-
-        # Verify person exists
-        cursor = await db.execute(
-            "SELECT person_id FROM persons WHERE person_id = ?",
-            (request.person_id,),
-        )
-        if not await cursor.fetchone():
-            raise HTTPException(status_code=404, detail="Person not found")
-
-        # Update face
-        await db.execute(
-            "UPDATE faces SET person_id = ? WHERE face_id = ?",
-            (request.person_id, face_id),
-        )
-
-        # Update person face count
-        await db.execute(
-            """
-            UPDATE persons
-            SET face_count = (SELECT COUNT(*) FROM faces WHERE person_id = ?),
-                updated_at_ms = ?
-            WHERE person_id = ?
-            """,
-            (request.person_id, int(datetime.now().timestamp() * 1000), request.person_id),
-        )
-
-        await db.commit()
-
-        return {"success": True, "face_id": face_id, "person_id": request.person_id}
-
-    raise HTTPException(status_code=500, detail="Database error")
-
-
-@router.delete("/{face_id}")
-async def delete_face(
-    face_id: str,
-    _token: str = Depends(verify_token),
-) -> dict:
-    """Delete a face."""
-    async for db in get_db():
-        # Get face info
-        cursor = await db.execute(
-            "SELECT person_id, crop_path FROM faces WHERE face_id = ?",
-            (face_id,),
-        )
-        row = await cursor.fetchone()
-
-        if not row:
-            raise HTTPException(status_code=404, detail="Face not found")
-
-        person_id = row["person_id"]
-        crop_path = row["crop_path"]
-
-        # Delete face
-        await db.execute("DELETE FROM faces WHERE face_id = ?", (face_id,))
-
-        # Update person face count if assigned
-        if person_id:
-            await db.execute(
-                """
-                UPDATE persons
-                SET face_count = (SELECT COUNT(*) FROM faces WHERE person_id = ?),
-                    updated_at_ms = ?
-                WHERE person_id = ?
-                """,
-                (person_id, int(datetime.now().timestamp() * 1000), person_id),
-            )
-
-        await db.commit()
-
-        # Delete crop file if exists
-        if crop_path:
-            try:
-                Path(crop_path).unlink(missing_ok=True)
-            except Exception as e:
-                logger.warning(f"Failed to delete face crop: {e}")
-
-        return {"success": True, "face_id": face_id}
-
-    raise HTTPException(status_code=500, detail="Database error")
-
-
 # =============================================================================
 # Persons Endpoints
 # =============================================================================
@@ -755,6 +541,220 @@ async def delete_person(
         await db.commit()
 
         return {"success": True, "person_id": person_id}
+
+    raise HTTPException(status_code=500, detail="Database error")
+
+
+@router.get("/{face_id}", response_model=Face)
+async def get_face(
+    face_id: str,
+    _token: str = Depends(verify_token),
+) -> Face:
+    """Get a single face by ID."""
+    async for db in get_db():
+        cursor = await db.execute(
+            """
+            SELECT f.*, p.name as person_name
+            FROM faces f
+            LEFT JOIN persons p ON f.person_id = p.person_id
+            WHERE f.face_id = ?
+            """,
+            (face_id,),
+        )
+        row = await cursor.fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Face not found")
+
+        return Face(
+            face_id=row["face_id"],
+            video_id=row["video_id"],
+            frame_id=row["frame_id"],
+            timestamp_ms=row["timestamp_ms"],
+            bbox_x=row["bbox_x"],
+            bbox_y=row["bbox_y"],
+            bbox_w=row["bbox_w"],
+            bbox_h=row["bbox_h"],
+            confidence=row["confidence"],
+            crop_path=row["crop_path"],
+            age=row["age"],
+            gender=row["gender"],
+            person_id=row["person_id"],
+            person_name=row["person_name"],
+            cluster_id=row["cluster_id"],
+            created_at_ms=row["created_at_ms"],
+        )
+
+    raise HTTPException(status_code=404, detail="Face not found")
+
+
+@router.get("/{face_id}/similar", response_model=SimilarFacesResponse)
+async def find_similar_faces(
+    face_id: str,
+    threshold: float = Query(0.5, ge=0.0, le=1.0, description="Minimum similarity"),
+    limit: int = Query(20, ge=1, le=100),
+    _token: str = Depends(verify_token),
+) -> SimilarFacesResponse:
+    """Find faces similar to the given face."""
+    async for db in get_db():
+        # Get the source face embedding
+        cursor = await db.execute(
+            "SELECT embedding FROM faces WHERE face_id = ?",
+            (face_id,),
+        )
+        row = await cursor.fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Face not found")
+
+        source_embedding = bytes_to_embedding(row["embedding"])
+
+        # Get all other faces with embeddings
+        cursor = await db.execute(
+            """
+            SELECT f.*, p.name as person_name
+            FROM faces f
+            LEFT JOIN persons p ON f.person_id = p.person_id
+            WHERE f.face_id != ?
+            """,
+            (face_id,),
+        )
+        rows = await cursor.fetchall()
+
+        # Calculate similarities
+        results = []
+        for row in rows:
+            embedding = bytes_to_embedding(row["embedding"])
+            similarity = compute_face_similarity(source_embedding, embedding)
+
+            if similarity >= threshold:
+                results.append((row, similarity))
+
+        # Sort by similarity descending
+        results.sort(key=lambda x: x[1], reverse=True)
+        results = results[:limit]
+
+        faces = [
+            Face(
+                face_id=row["face_id"],
+                video_id=row["video_id"],
+                frame_id=row["frame_id"],
+                timestamp_ms=row["timestamp_ms"],
+                bbox_x=row["bbox_x"],
+                bbox_y=row["bbox_y"],
+                bbox_w=row["bbox_w"],
+                bbox_h=row["bbox_h"],
+                confidence=row["confidence"],
+                crop_path=row["crop_path"],
+                age=row["age"],
+                gender=row["gender"],
+                person_id=row["person_id"],
+                person_name=row["person_name"],
+                cluster_id=row["cluster_id"],
+                created_at_ms=row["created_at_ms"],
+            )
+            for row, _ in results
+        ]
+        similarities = [sim for _, sim in results]
+
+        return SimilarFacesResponse(faces=faces, similarities=similarities)
+
+    return SimilarFacesResponse(faces=[], similarities=[])
+
+
+@router.post("/{face_id}/assign")
+async def assign_face_to_person(
+    face_id: str,
+    request: AssignFaceRequest,
+    _token: str = Depends(verify_token),
+) -> dict:
+    """Assign a face to a person."""
+    async for db in get_db():
+        # Verify face exists
+        cursor = await db.execute(
+            "SELECT face_id FROM faces WHERE face_id = ?",
+            (face_id,),
+        )
+        if not await cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Face not found")
+
+        # Verify person exists
+        cursor = await db.execute(
+            "SELECT person_id FROM persons WHERE person_id = ?",
+            (request.person_id,),
+        )
+        if not await cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        # Update face
+        await db.execute(
+            "UPDATE faces SET person_id = ? WHERE face_id = ?",
+            (request.person_id, face_id),
+        )
+
+        # Update person face count
+        await db.execute(
+            """
+            UPDATE persons
+            SET face_count = (SELECT COUNT(*) FROM faces WHERE person_id = ?),
+                updated_at_ms = ?
+            WHERE person_id = ?
+            """,
+            (request.person_id, int(datetime.now().timestamp() * 1000), request.person_id),
+        )
+
+        await db.commit()
+
+        return {"success": True, "face_id": face_id, "person_id": request.person_id}
+
+    raise HTTPException(status_code=500, detail="Database error")
+
+
+@router.delete("/{face_id}")
+async def delete_face(
+    face_id: str,
+    _token: str = Depends(verify_token),
+) -> dict:
+    """Delete a face."""
+    async for db in get_db():
+        # Get face info
+        cursor = await db.execute(
+            "SELECT person_id, crop_path FROM faces WHERE face_id = ?",
+            (face_id,),
+        )
+        row = await cursor.fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Face not found")
+
+        person_id = row["person_id"]
+        crop_path = row["crop_path"]
+
+        # Delete face
+        await db.execute("DELETE FROM faces WHERE face_id = ?", (face_id,))
+
+        # Update person face count if assigned
+        if person_id:
+            await db.execute(
+                """
+                UPDATE persons
+                SET face_count = (SELECT COUNT(*) FROM faces WHERE person_id = ?),
+                    updated_at_ms = ?
+                WHERE person_id = ?
+                """,
+                (person_id, int(datetime.now().timestamp() * 1000), person_id),
+            )
+
+        await db.commit()
+
+        # Delete crop file if exists
+        if crop_path:
+            try:
+                Path(crop_path).unlink(missing_ok=True)
+            except Exception as e:
+                logger.warning(f"Failed to delete face crop: {e}")
+
+        return {"success": True, "face_id": face_id}
 
     raise HTTPException(status_code=500, detail="Database error")
 

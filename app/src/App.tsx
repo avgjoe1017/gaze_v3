@@ -42,6 +42,7 @@ interface SettingsData {
   max_concurrent_jobs: number;
   thumbnail_quality: number;
   frame_interval_seconds: number;
+  indexing_preset: string;
   transcription_model: string;
   transcription_language: string | null;
   transcription_backend: string;
@@ -460,21 +461,24 @@ function StatusBadge({
   wsConnected: boolean;
 }) {
   const labels = {
-    connected: "Engine Running",
-    disconnected: "Engine Offline",
-    starting: "Engine Starting",
+    connected: "Ready",
+    disconnected: "Offline",
+    starting: "Starting",
   };
 
   return (
     <div className="status-badges">
-      <div className={`status-badge ${status}`}>
+      <div className={`status-badge ${status}`} title={status === "connected" ? "Engine running locally" : undefined}>
         <span className="status-dot" />
         {labels[status]}
       </div>
       {status === "connected" && (
-        <div className={`status-badge ${wsConnected ? "ws-connected" : "ws-disconnected"}`}>
+        <div
+          className={`status-badge ${wsConnected ? "ws-connected" : "ws-disconnected"}`}
+          title={wsConnected ? "Live local updates" : "Local link reconnecting"}
+        >
           <span className="status-dot" />
-          {wsConnected ? "Local Live" : "Local Link"}
+          {wsConnected ? "Live updates" : "Reconnecting"}
         </div>
       )}
     </div>

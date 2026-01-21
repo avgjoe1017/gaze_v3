@@ -18,6 +18,11 @@ interface NetworkStatusResponse {
   recent_requests: NetworkRequestEntry[];
 }
 
+interface WipeDerivedResponse {
+  status: string;
+  message: string;
+}
+
 interface PrivacyViewProps {
   offlineMode: boolean;
   onUpdate: (update: { offline_mode: boolean }) => Promise<void>;
@@ -34,6 +39,8 @@ export function PrivacyView({ offlineMode, onUpdate }: PrivacyViewProps) {
   const [network, setNetwork] = useState<NetworkStatusResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [wiping, setWiping] = useState(false);
+  const [wipeStatus, setWipeStatus] = useState<string | null>(null);
 
   const fetchStatus = useCallback(async () => {
     setLoading(true);
@@ -56,6 +63,24 @@ export function PrivacyView({ offlineMode, onUpdate }: PrivacyViewProps) {
       setError(err instanceof Error ? err.message : "Failed to update networking setting");
     }
   }, [offlineMode, onUpdate]);
+
+  const handleWipeDerived = useCallback(async () => {
+    setError(null);
+    setWipeStatus(null);
+    const confirmed = window.confirm(
+      "Wipe derived data? This removes transcripts, thumbnails, detections, faces, and indexes. Media files stay intact."
+    );
+    if (!confirmed) return;
+    setWiping(true);
+    try {
+      const data = await apiRequest<WipeDerivedResponse>("/maintenance/wipe-derived", { method: "POST" });
+      setWipeStatus(data.message || "Derived data wiped. Re-scan libraries to rebuild indexes.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to wipe derived data");
+    } finally {
+      setWiping(false);
+    }
+  }, []);
 
   useEffect(() => {
     fetchStatus();
@@ -142,6 +167,19 @@ export function PrivacyView({ offlineMode, onUpdate }: PrivacyViewProps) {
           <p className="privacy-note">
             If you see a request here, it should only be for model downloads you triggered.
           </p>
+        </div>
+
+        <div className="privacy-card">
+          <h3>Derived data controls</h3>
+          <p className="privacy-note">
+            Clear transcripts, thumbnails, detections, face crops, and indexes. Media files are untouched.
+          </p>
+          <div className="privacy-wipe-actions">
+            <button className="btn btn-secondary" onClick={handleWipeDerived} disabled={wiping}>
+              {wiping ? "Wiping..." : "Wipe Derived Data"}
+            </button>
+          </div>
+          {wipeStatus && <div className="privacy-wipe-status">{wipeStatus}</div>}
         </div>
       </div>
 

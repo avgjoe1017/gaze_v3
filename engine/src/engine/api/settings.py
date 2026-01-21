@@ -19,6 +19,7 @@ DEFAULT_SETTINGS = {
     "max_concurrent_jobs": 2,
     "thumbnail_quality": 85,
     "frame_interval_seconds": 2.0,
+    "indexing_preset": "deep",
     "transcription_model": "base",
     "transcription_language": None,
     "transcription_backend": "auto",
@@ -37,6 +38,7 @@ class Settings(BaseModel):
     max_concurrent_jobs: int = 2
     thumbnail_quality: int = 85
     frame_interval_seconds: float = 2.0
+    indexing_preset: str = "deep"
     transcription_model: str = "base"
     transcription_language: str | None = None
     transcription_backend: str = "auto"
@@ -54,6 +56,7 @@ class SettingsUpdate(BaseModel):
     max_concurrent_jobs: int | None = None
     thumbnail_quality: int | None = None
     frame_interval_seconds: float | None = None
+    indexing_preset: str | None = None
     transcription_model: str | None = None
     transcription_language: str | None = None
     transcription_backend: str | None = None

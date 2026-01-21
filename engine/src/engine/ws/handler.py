@@ -40,9 +40,12 @@ def extract_token_from_websocket(websocket: WebSocket) -> str | None:
     """
     # Try Sec-WebSocket-Protocol header first
     protocol_header = websocket.headers.get("sec-websocket-protocol", "")
-    if protocol_header.startswith("gaze-token."):
-        token = protocol_header[len("gaze-token."):].strip()
-        return token
+    if protocol_header:
+        protocols = [p.strip() for p in protocol_header.split(",") if p.strip()]
+        for protocol in protocols:
+            if protocol.startswith("gaze-token."):
+                token = protocol[len("gaze-token."):].strip()
+                return token
     
     # Fallback to query string
     query_string = websocket.url.query

@@ -70,38 +70,58 @@ export async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const port = await getEnginePort();
-  const token = await getAuthToken();
+  const canRetry =
+    options.body == null ||
+    typeof options.body === "string" ||
+    (typeof FormData !== "undefined" && options.body instanceof FormData) ||
+    (typeof URLSearchParams !== "undefined" &&
+      options.body instanceof URLSearchParams);
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(options.headers as Record<string, string> | undefined),
-  };
+  let attempt = 0;
+  while (true) {
+    const port = await getEnginePort();
+    const token = await getAuthToken();
 
-  // Add bearer token if available
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
+    const isFormData =
+      typeof FormData !== "undefined" && options.body instanceof FormData;
+    const headers: Record<string, string> = {
+      ...(options.headers as Record<string, string> | undefined),
+    };
+    if (!isFormData && !("Content-Type" in headers)) {
+      headers["Content-Type"] = "application/json";
+    }
+
+    // Add bearer token if available
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
+    const url = `http://127.0.0.1:${port}${endpoint}`;
+
+    const response = await fetch(url, {
+      ...options,
+      headers,
+    });
+
+    if (response.status === 401 && attempt === 0 && canRetry) {
+      clearAuthToken();
+      attempt += 1;
+      continue;
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => response.statusText);
+      throw new Error(`API request failed: ${response.status} ${errorText}`);
+    }
+
+    // Return JSON if content type is JSON, otherwise return text
+    const contentType = response.headers.get("content-type");
+    if (contentType?.includes("application/json")) {
+      return (await response.json()) as T;
+    }
+
+    return (await response.text()) as T;
   }
-
-  const url = `http://127.0.0.1:${port}${endpoint}`;
-
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(`API request failed: ${response.status} ${errorText}`);
-  }
-
-  // Return JSON if content type is JSON, otherwise return text
-  const contentType = response.headers.get("content-type");
-  if (contentType?.includes("application/json")) {
-    return (await response.json()) as T;
-  }
-
-  return (await response.text()) as T;
 }
 
 /**

@@ -44,6 +44,12 @@ class AddLibraryRequest(BaseModel):
     recursive: bool = True
 
 
+class UpdateLibraryRequest(BaseModel):
+    """Request to update a library."""
+
+    name: str | None = None
+
+
 class ScanResponse(BaseModel):
     """Scan response."""
 
@@ -193,6 +199,30 @@ async def delete_library(library_id: str, _token: str = Depends(verify_token)) -
 
         logger.info(f"Deleted library {library_id}")
         return {"success": True}
+
+
+@router.patch("/{library_id}", response_model=Library)
+async def update_library(
+    library_id: str,
+    request: UpdateLibraryRequest,
+    _token: str = Depends(verify_token),
+) -> Library:
+    """Update library metadata (name, etc.)."""
+    async for db in get_db():
+        cursor = await db.execute(
+            "SELECT library_id FROM libraries WHERE library_id = ?",
+            (library_id,),
+        )
+        if not await cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Library not found")
+
+        await db.execute(
+            "UPDATE libraries SET name = ? WHERE library_id = ?",
+            (request.name, library_id),
+        )
+        await db.commit()
+
+        return await get_library(library_id, _token)
 
 
 @router.post("/{library_id}/scan", response_model=ScanResponse)

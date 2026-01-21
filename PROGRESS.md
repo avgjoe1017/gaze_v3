@@ -2107,3 +2107,72 @@ Added a dedicated Privacy view that makes local-only behavior verifiable and ren
 1. Add “Wipe derived data” action (transcripts, frames, detections, faces, FAISS, thumbnails) with rebuild prompt.
 2. Implement “Quick vs Deep” indexing presets in settings and pipeline staging.
 3. Add model pack import + checksum verification for air-gapped installs.
+
+---
+
+**Date:** 2026-01-19
+
+**Time:** 23:58
+
+### Summary
+Added InsightFace and ONNX Runtime to optional ML dependencies to enable face detection functionality.
+
+### Decision
+While reviewing terminal logs, noticed that face detection was being skipped with a warning that InsightFace was not installed. The face detection code already gracefully handles missing dependencies, but to enable the full feature set, these packages should be available as optional ML dependencies. This allows users to install face detection capabilities when needed via `pip install gaze-engine[ml]`.
+
+### Changes
+- Added `insightface>=0.7.3` to `[project.optional-dependencies.ml]`
+- Added `onnxruntime>=1.16.0` to `[project.optional-dependencies.ml]`
+
+### Files Modified
+- `engine/pyproject.toml`
+
+---
+
+## 2026-01-21 - Maintenance Controls, Indexing Presets, Offline Model Packs
+
+**Time:** Implementation session
+
+### Summary
+Implemented derived-data wipe controls, quick vs deep indexing presets, and offline model pack import with checksum verification for air-gapped installs.
+
+### Changes
+- **Wipe Derived Data:** Added `/maintenance/wipe-derived` to clear transcripts, frames, detections, faces, FAISS shards, thumbnails, and reset indexing state.
+- **Indexing Presets:** New `indexing_preset` setting (Quick/Deep) and stage gating in indexer pipeline.
+- **Model Pack Import:** Added `/models/import` to ingest model pack ZIPs with `manifest.json` + SHA256 verification; UI supports import flow.
+
+### Files Modified / Added
+- `engine/src/engine/api/maintenance.py` (new)
+- `engine/src/engine/api/models.py`
+- `engine/src/engine/api/settings.py`
+- `engine/src/engine/api/__init__.py`
+- `engine/src/engine/main.py`
+- `engine/src/engine/core/indexer.py`
+- `app/src/components/PrivacyView.tsx`
+- `app/src/components/SettingsView.tsx`
+- `app/src/components/ModelDownload.tsx`
+- `app/src/App.tsx`
+- `app/src/lib/apiClient.ts`
+- `app/src/styles.css`
+- `contracts/openapi.yaml`
+
+### Notes
+- Derived data wipe preserves raw media files; re-scan libraries to rebuild indexes.
+- Offline model pack requires a ZIP containing `manifest.json` with model IDs and SHA256 checksums.
+
+---
+
+## 2026-01-21 - Enhanced Indexing Runs After Primary
+
+**Time:** Implementation session
+
+### Summary
+Reordered the indexing flow so audio extraction + transcription run quietly after primary indexing completes, enabling fast “index complete” while enhanced indexing catches up in the background.
+
+### Changes
+- Split indexing stages into **primary** (visual pipeline) and **enhanced** (audio + transcription).
+- Primary indexing marks videos `DONE` quickly; enhanced stages run in a background task without UI progress noise.
+- Added cancellation support for enhanced tasks so wipe/stop cancels them cleanly.
+
+### Files Modified
+- `engine/src/engine/core/indexer.py`

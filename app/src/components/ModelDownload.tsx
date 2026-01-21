@@ -69,6 +69,9 @@ export function ModelDownload({ missingModels, wsDownloads, offlineMode = false 
   const [progress, setProgress] = useState<Record<string, number>>({});
   const [completed, setCompleted] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [packFile, setPackFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
 
   // Update progress from WebSocket if available
   useEffect(() => {
@@ -184,6 +187,56 @@ export function ModelDownload({ missingModels, wsDownloads, offlineMode = false 
   const allComplete = MODELS.every((m) => !isModelMissing(m.id));
   const anyDownloading = downloading.size > 0;
 
+  const handleImportPack = async () => {
+    if (!packFile) {
+      setError("Choose a model pack ZIP first.");
+      return;
+    }
+    setError(null);
+    setImportMessage(null);
+    setImporting(true);
+
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      const form = new FormData();
+      form.append("pack", packFile);
+      const data = await apiRequest<{
+        status: string;
+        imported: string[];
+        skipped: string[];
+        errors: string[];
+      }>("/models/import", {
+        method: "POST",
+        body: form,
+      });
+
+      if (data.imported?.length) {
+        setCompleted((prev) => Array.from(new Set([...prev, ...data.imported])));
+        setProgress((prev) => {
+          const next = { ...prev };
+          data.imported.forEach((id) => {
+            next[id] = 100;
+          });
+          return next;
+        });
+      }
+
+      const messages: string[] = [];
+      if (data.imported?.length) messages.push(`Imported: ${data.imported.join(", ")}`);
+      if (data.skipped?.length) messages.push(`Skipped: ${data.skipped.join(", ")}`);
+      if (data.errors?.length) {
+        setError(data.errors.join(" | "));
+      }
+      if (messages.length) {
+        setImportMessage(messages.join(" • "));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Model pack import failed");
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div className="model-download">
       {offlineMode && (
@@ -298,6 +351,24 @@ export function ModelDownload({ missingModels, wsDownloads, offlineMode = false 
             Continue to App
           </button>
         )}
+      </div>
+
+      <div className="model-import">
+        <h3>Air-gapped install</h3>
+        <p>
+          Import a model pack ZIP that includes `manifest.json` and model files with SHA256 checksums.
+        </p>
+        <div className="model-import-actions">
+          <input
+            type="file"
+            accept=".zip,application/zip"
+            onChange={(e) => setPackFile(e.target.files?.[0] ?? null)}
+          />
+          <button className="btn btn-secondary" onClick={handleImportPack} disabled={importing}>
+            {importing ? "Importing..." : "Import Pack"}
+          </button>
+        </div>
+        {importMessage && <div className="model-import-status">{importMessage}</div>}
       </div>
     </div>
   );

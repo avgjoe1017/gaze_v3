@@ -23,6 +23,8 @@ ml = [
     "torch==2.9.1",
     "torchvision==0.24.1",
     "numpy>=1.24.0",
+    "insightface>=0.7.3",
+    "onnxruntime>=1.16.0",
 ]
 dev = [
     "pytest>=8.0.0",

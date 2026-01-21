@@ -14,7 +14,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import health, models, libraries, videos, media, search, jobs, settings, logs, stats, assets, faces, backup, network
+from .api import health, models, libraries, videos, media, search, jobs, settings, logs, stats, assets, faces, backup, network, maintenance
 from .ws.handler import websocket_handler
 from .core.lifecycle import LifecycleManager, repair_consistency
 from .core.indexer import auto_continue_indexing
@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         data_dir=data_dir,
     )
     await lifecycle_manager.startup()
+    app.state.lifecycle_manager = lifecycle_manager
 
     # Start auto-continuation background task for indexing
     asyncio.create_task(auto_continue_indexing())
@@ -96,6 +97,7 @@ def create_app() -> FastAPI:
     app.include_router(faces.router)
     app.include_router(backup.router)
     app.include_router(network.router)
+    app.include_router(maintenance.router)
 
     # WebSocket endpoint
     @app.websocket("/ws")
