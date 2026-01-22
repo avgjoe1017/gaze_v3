@@ -18,6 +18,12 @@ const UsersIcon = () => (
   </svg>
 );
 
+const StarIcon = ({ filled = false }: { filled?: boolean }) => (
+  <svg viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <polygon points="12 2 15 9 22 9 16.5 14 18.5 22 12 17.5 5.5 22 7.5 14 2 9 9 9 12 2" />
+  </svg>
+);
+
 const SearchIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <circle cx="11" cy="11" r="8" />
@@ -32,12 +38,6 @@ const PlusIcon = () => (
   </svg>
 );
 
-const TagIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
-    <line x1="7" y1="7" x2="7.01" y2="7" />
-  </svg>
-);
 
 const GridIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -61,12 +61,6 @@ const CloseIcon = () => (
   </svg>
 );
 
-const RefreshIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-    <polyline points="23 4 23 10 17 10" />
-    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-  </svg>
-);
 
 const ClockIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -161,10 +155,10 @@ interface PersonTimeline {
   videos: VideoAppearance[];
 }
 
-type ViewMode = "all" | "persons" | "unassigned" | "clusters";
+type ViewMode = "people" | "unassigned" | "all";
 
 export function Faces() {
-  const [viewMode, setViewMode] = useState<ViewMode>("all");
+  const [viewMode, setViewMode] = useState<ViewMode>("people");
   const [faces, setFaces] = useState<Face[]>([]);
   const [persons, setPersons] = useState<Person[]>([]);
   const [clusters, setClusters] = useState<FaceCluster[]>([]);
@@ -177,10 +171,11 @@ export function Faces() {
   const [showNameModal, setShowNameModal] = useState(false);
   const [newPersonName, setNewPersonName] = useState("");
   const [isCreatingPerson, setIsCreatingPerson] = useState(false);
-  const [isClustering, setIsClustering] = useState(false);
   const [timeline, setTimeline] = useState<PersonTimeline | null>(null);
   const [showTimeline, setShowTimeline] = useState(false);
   const [timelineLoading, setTimelineLoading] = useState(false);
+  const [favoritePersonIds, setFavoritePersonIds] = useState<Set<string>>(new Set());
+  const [selectedPersonIds, setSelectedPersonIds] = useState<Set<string>>(new Set());
 
   // Fetch API base URL
   useEffect(() => {
@@ -206,12 +201,10 @@ export function Faces() {
   // Fetch data based on view mode
   useEffect(() => {
     fetchStats();
-    if (viewMode === "all" || viewMode === "unassigned") {
+    fetchPersons();
+    fetchClusters();
+    if (viewMode === "all") {
       fetchFaces();
-    } else if (viewMode === "persons") {
-      fetchPersons();
-    } else if (viewMode === "clusters") {
-      fetchClusters();
     }
   }, [viewMode]);
 
@@ -221,6 +214,35 @@ export function Faces() {
       fetchFaces(selectedPerson.person_id);
     }
   }, [selectedPerson]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem("gaze.personFavorites");
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setFavoritePersonIds(new Set(parsed));
+        }
+      } catch {
+        setFavoritePersonIds(new Set());
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(
+      "gaze.personFavorites",
+      JSON.stringify(Array.from(favoritePersonIds))
+    );
+  }, [favoritePersonIds]);
+
+  useEffect(() => {
+    if (viewMode === "people") {
+      fetchPersons();
+    }
+  }, [searchQuery]);
 
   const fetchStats = async () => {
     try {
@@ -254,7 +276,6 @@ export function Faces() {
   };
 
   const fetchPersons = async () => {
-    setLoading(true);
     try {
       const { apiRequest } = await import("../lib/apiClient");
       const endpoint = searchQuery
@@ -264,13 +285,10 @@ export function Faces() {
       setPersons(data.persons || []);
     } catch (err) {
       console.error("Failed to fetch persons:", err);
-    } finally {
-      setLoading(false);
     }
   };
 
   const fetchClusters = async () => {
-    setLoading(true);
     try {
       const { apiRequest } = await import("../lib/apiClient");
       const data = await apiRequest<{ clusters: FaceCluster[]; total: number }>(
@@ -280,8 +298,6 @@ export function Faces() {
       setClusters(data.clusters || []);
     } catch (err) {
       console.error("Failed to fetch clusters:", err);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -307,6 +323,106 @@ export function Faces() {
       }
       return next;
     });
+  };
+
+  const openNameModal = (faceIds: string[]) => {
+    setSelectedFaces(new Set(faceIds));
+    setNewPersonName("");
+    setShowNameModal(true);
+  };
+
+  const toggleFavorite = (personId: string) => {
+    setFavoritePersonIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(personId)) {
+        next.delete(personId);
+      } else {
+        next.add(personId);
+      }
+      return next;
+    });
+  };
+
+  const togglePersonSelection = (personId: string) => {
+    setSelectedPersonIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(personId)) {
+        next.delete(personId);
+      } else {
+        next.add(personId);
+      }
+      return next;
+    });
+  };
+
+  const clearSelection = () => {
+    setSelectedPersonIds(new Set());
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedPersonIds.size === 0) return;
+    const confirmed = window.confirm(
+      `Delete ${selectedPersonIds.size} person${selectedPersonIds.size !== 1 ? "s" : ""}? Faces will be unassigned.`
+    );
+    if (!confirmed) return;
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      for (const personId of selectedPersonIds) {
+        await apiRequest(`/faces/persons/${personId}?unassign_faces=true`, { method: "DELETE" });
+      }
+      await fetchStats();
+      await fetchPersons();
+      clearSelection();
+    } catch (err) {
+      console.error("Failed to delete persons:", err);
+      alert("Failed to delete selected people.");
+    }
+  };
+
+  const handleMergeSelected = async () => {
+    if (selectedPersonIds.size < 2) return;
+    const ids = Array.from(selectedPersonIds);
+    const primaryId = ids[0];
+    const confirmed = window.confirm(
+      `Merge ${ids.length} people into the first selected person?`
+    );
+    if (!confirmed) return;
+
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      for (const personId of ids.slice(1)) {
+        const data = await apiRequest<{ faces: Face[]; total: number }>(
+          `/faces?person_id=${encodeURIComponent(personId)}&limit=1000`
+        );
+        for (const face of data.faces || []) {
+          await apiRequest(`/faces/${face.face_id}/assign`, {
+            method: "POST",
+            body: JSON.stringify({ person_id: primaryId }),
+          });
+        }
+        await apiRequest(`/faces/persons/${personId}?unassign_faces=true`, { method: "DELETE" });
+      }
+      await fetchStats();
+      await fetchPersons();
+      clearSelection();
+    } catch (err) {
+      console.error("Failed to merge people:", err);
+      alert("Failed to merge selected people.");
+    }
+  };
+
+  const handleNameCluster = async (clusterId: string) => {
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      const data = await apiRequest<{ faces: Face[]; total: number }>(
+        `/faces?cluster_id=${encodeURIComponent(clusterId)}&limit=1000`
+      );
+      const faceIds = (data.faces || []).map((face) => face.face_id);
+      if (faceIds.length === 0) return;
+      openNameModal(faceIds);
+    } catch (err) {
+      console.error("Failed to load cluster faces:", err);
+    }
   };
 
   const selectAllFaces = () => {
@@ -338,9 +454,9 @@ export function Faces() {
 
       // Refresh data
       await fetchStats();
-      if (viewMode === "persons") {
-        await fetchPersons();
-      } else {
+      await fetchPersons();
+      await fetchClusters();
+      if (viewMode === "unassigned" || viewMode === "all") {
         await fetchFaces();
       }
     } catch (err) {
@@ -368,53 +484,12 @@ export function Faces() {
       // Reset and refresh
       setSelectedFaces(new Set());
       await fetchStats();
+      await fetchPersons();
+      await fetchClusters();
       await fetchFaces();
     } catch (err) {
       console.error("Failed to assign faces:", err);
       alert("Failed to assign faces. Please try again.");
-    }
-  };
-
-  const handleMergeFaces = async (clusterId: string) => {
-    try {
-      const { apiRequest } = await import("../lib/apiClient");
-
-      // Get faces in this cluster
-      const clusterFaces = clusters.find((c) => c.cluster_id === clusterId)?.sample_faces || [];
-
-      // Create a new person from this cluster
-      await apiRequest("/faces/merge", {
-        method: "POST",
-        body: JSON.stringify({
-          face_ids: clusterFaces.map((f) => f.face_id),
-          name: `Person (Cluster ${clusterId})`,
-        }),
-      });
-
-      // Refresh
-      await fetchStats();
-      await fetchClusters();
-    } catch (err) {
-      console.error("Failed to merge faces:", err);
-      alert("Failed to merge faces. Please try again.");
-    }
-  };
-
-  const handleRunClustering = async () => {
-    setIsClustering(true);
-    try {
-      const { apiRequest } = await import("../lib/apiClient");
-      const data = await apiRequest<{ clusters: FaceCluster[]; total: number }>(
-        "/faces/cluster",
-        { method: "POST", body: JSON.stringify({ threshold: 0.6 }) }
-      );
-      setClusters(data.clusters || []);
-      await fetchStats();
-    } catch (err) {
-      console.error("Failed to run clustering:", err);
-      alert("Failed to run clustering. Please try again.");
-    } finally {
-      setIsClustering(false);
     }
   };
 
@@ -423,6 +498,14 @@ export function Faces() {
     const query = searchQuery.toLowerCase();
     return persons.filter((p) => p.name.toLowerCase().includes(query));
   }, [persons, searchQuery]);
+
+  const favoritePersons = useMemo(() => {
+    return filteredPersons.filter((person) => favoritePersonIds.has(person.person_id));
+  }, [filteredPersons, favoritePersonIds]);
+
+  const nonFavoritePersons = useMemo(() => {
+    return filteredPersons.filter((person) => !favoritePersonIds.has(person.person_id));
+  }, [filteredPersons, favoritePersonIds]);
 
   const fetchTimeline = async (personId: string) => {
     setTimelineLoading(true);
@@ -463,7 +546,10 @@ export function Faces() {
       <div className="faces-header">
         <div className="faces-title">
           <UsersIcon />
-          <h2>Face Recognition</h2>
+          <div>
+            <h2>People</h2>
+            <span className="faces-subtitle">Runs locally on this device</span>
+          </div>
         </div>
 
         {/* Stats */}
@@ -489,19 +575,9 @@ export function Faces() {
       <div className="faces-toolbar">
         <div className="view-tabs">
           <button
-            className={`tab ${viewMode === "all" ? "active" : ""}`}
+            className={`tab ${viewMode === "people" ? "active" : ""}`}
             onClick={() => {
-              setViewMode("all");
-              setSelectedPerson(null);
-            }}
-          >
-            <GridIcon />
-            All Faces
-          </button>
-          <button
-            className={`tab ${viewMode === "persons" ? "active" : ""}`}
-            onClick={() => {
-              setViewMode("persons");
+              setViewMode("people");
               setSelectedPerson(null);
             }}
           >
@@ -516,22 +592,22 @@ export function Faces() {
             }}
           >
             <UserIcon />
-            Unassigned
+            Review Unassigned
           </button>
           <button
-            className={`tab ${viewMode === "clusters" ? "active" : ""}`}
+            className={`tab ${viewMode === "all" ? "active" : ""}`}
             onClick={() => {
-              setViewMode("clusters");
+              setViewMode("all");
               setSelectedPerson(null);
             }}
           >
-            <TagIcon />
-            Clusters
+            <GridIcon />
+            All Faces
           </button>
         </div>
 
         <div className="toolbar-actions">
-          {viewMode === "persons" && (
+          {viewMode === "people" && (
             <div className="search-box">
               <SearchIcon />
               <input
@@ -541,26 +617,6 @@ export function Faces() {
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
-          )}
-
-          {viewMode === "clusters" && (
-            <button
-              className="btn btn-secondary"
-              onClick={handleRunClustering}
-              disabled={isClustering}
-            >
-              {isClustering ? (
-                <>
-                  <div className="spinner" style={{ width: 16, height: 16 }} />
-                  Clustering...
-                </>
-              ) : (
-                <>
-                  <RefreshIcon />
-                  Re-cluster
-                </>
-              )}
-            </button>
           )}
 
           {selectedFaces.size > 0 && (
@@ -614,71 +670,209 @@ export function Faces() {
             <div className="spinner spinner-large" />
             <p>Loading...</p>
           </div>
-        ) : viewMode === "persons" && !selectedPerson ? (
-          /* Persons Grid */
-          <div className="persons-grid">
-            {filteredPersons.length === 0 ? (
-              <div className="empty-state">
-                <UsersIcon />
-                <h3>No people yet</h3>
-                <p>
-                  Select faces from the "All Faces" or "Unassigned" tabs and create people.
-                </p>
-              </div>
-            ) : (
-              filteredPersons.map((person) => (
-                <div
-                  key={person.person_id}
-                  className="person-card"
-                >
-                  <div
-                    className="person-card-main"
-                    onClick={() => {
-                      setSelectedPerson(person);
-                      fetchFaces(person.person_id);
-                    }}
-                  >
-                    <div className="person-thumbnail">
-                      {person.thumbnail_crop_path ? (
-                        <img
-                          src={resolveFaceUrl(person.thumbnail_crop_path)}
-                          alt={person.name}
-                        />
-                      ) : (
-                        <div className="placeholder">
-                          <UserIcon />
-                        </div>
-                      )}
-                    </div>
-                    <div className="person-info">
-                      <div className="person-name">{person.name}</div>
-                      <div className="person-meta">{person.face_count} faces</div>
-                    </div>
+        ) : viewMode === "people" ? (
+          <div className="faces-people-view">
+            {selectedPersonIds.size > 0 && (
+              <div className="faces-section">
+                <div className="faces-selection-bar">
+                  <div className="faces-selection-left">
+                    <span className="selection-count">
+                      {selectedPersonIds.size} selected
+                    </span>
+                    <button className="btn btn-ghost" onClick={clearSelection}>
+                      Clear
+                    </button>
                   </div>
-                  <button
-                    className="btn-icon timeline-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      fetchTimeline(person.person_id);
-                    }}
-                    title="View timeline"
-                  >
-                    <ClockIcon />
-                  </button>
+                  <div className="faces-selection-actions">
+                    <button
+                      className="btn btn-secondary"
+                      onClick={handleMergeSelected}
+                      disabled={selectedPersonIds.size < 2}
+                    >
+                      Merge
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={handleDeleteSelected}
+                      disabled={selectedPersonIds.size === 0}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
-              ))
+              </div>
             )}
+            <div className="faces-section">
+              <div className="faces-section-header">
+                <div>
+                  <h3>FAVORITES</h3>
+                  <p>Your most important people, pinned here.</p>
+                </div>
+              </div>
+              {favoritePersons.length === 0 ? (
+                <div className="empty-state compact">
+                  <StarIcon />
+                  <h3>No favorites yet</h3>
+                  <p>Tap the star on a person to pin them here.</p>
+                </div>
+              ) : (
+                <div className="persons-grid">
+                  {favoritePersons.map((person) => (
+                    <div
+                      key={person.person_id}
+                      className="person-card"
+                    >
+                      <div
+                        className="person-card-main"
+                        onClick={() => {
+                          setSelectedPerson(person);
+                          fetchFaces(person.person_id);
+                        }}
+                      >
+                        <div className="person-thumbnail">
+                          {person.thumbnail_crop_path ? (
+                            <img
+                              src={resolveFaceUrl(person.thumbnail_crop_path)}
+                              alt={person.name}
+                            />
+                          ) : (
+                            <div className="placeholder">
+                              <UserIcon />
+                            </div>
+                          )}
+                        </div>
+                        <div className="person-info">
+                          <div className="person-name">{person.name}</div>
+                          <div className="person-meta">{person.face_count} faces</div>
+                        </div>
+                        <button
+                          className={`person-select ${selectedPersonIds.has(person.person_id) ? "active" : ""}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            togglePersonSelection(person.person_id);
+                          }}
+                          title="Select"
+                          type="button"
+                        >
+                          <CheckIcon />
+                        </button>
+                      </div>
+                      <button
+                        className={`btn-icon person-favorite ${favoritePersonIds.has(person.person_id) ? "active" : ""}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleFavorite(person.person_id);
+                        }}
+                        title="Toggle favorite"
+                      >
+                        <StarIcon filled={favoritePersonIds.has(person.person_id)} />
+                      </button>
+                      <button
+                        className="btn-icon timeline-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          fetchTimeline(person.person_id);
+                        }}
+                        title="View timeline"
+                      >
+                        <ClockIcon />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="faces-section">
+              <div className="faces-section-header">
+                <div>
+                  <h3>PEOPLE</h3>
+                  <p>Tap a person to see everywhere they appear.</p>
+                </div>
+              </div>
+              <div className="persons-grid">
+                {nonFavoritePersons.length === 0 ? (
+                  <div className="empty-state">
+                    <UsersIcon />
+                    <h3>No people yet</h3>
+                    <p>
+                      Name a few faces to get started.
+                    </p>
+                  </div>
+                ) : (
+                  nonFavoritePersons.map((person) => (
+                    <div
+                      key={person.person_id}
+                      className="person-card"
+                    >
+                      <div
+                        className="person-card-main"
+                        onClick={() => {
+                          setSelectedPerson(person);
+                          fetchFaces(person.person_id);
+                        }}
+                      >
+                        <div className="person-thumbnail">
+                          {person.thumbnail_crop_path ? (
+                            <img
+                              src={resolveFaceUrl(person.thumbnail_crop_path)}
+                              alt={person.name}
+                            />
+                          ) : (
+                            <div className="placeholder">
+                              <UserIcon />
+                            </div>
+                          )}
+                        </div>
+                        <div className="person-info">
+                          <div className="person-name">{person.name}</div>
+                          <div className="person-meta">{person.face_count} faces</div>
+                        </div>
+                        <button
+                          className={`person-select ${selectedPersonIds.has(person.person_id) ? "active" : ""}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            togglePersonSelection(person.person_id);
+                          }}
+                          title="Select"
+                          type="button"
+                        >
+                          <CheckIcon />
+                        </button>
+                      </div>
+                      <button
+                        className={`btn-icon person-favorite ${favoritePersonIds.has(person.person_id) ? "active" : ""}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleFavorite(person.person_id);
+                        }}
+                        title="Toggle favorite"
+                      >
+                        <StarIcon filled={favoritePersonIds.has(person.person_id)} />
+                      </button>
+                      <button
+                        className="btn-icon timeline-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          fetchTimeline(person.person_id);
+                        }}
+                        title="View timeline"
+                      >
+                        <ClockIcon />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
-        ) : viewMode === "clusters" ? (
-          /* Clusters Grid */
+        ) : viewMode === "unassigned" ? (
           <div className="clusters-grid">
             {clusters.length === 0 ? (
               <div className="empty-state">
-                <TagIcon />
-                <h3>No clusters</h3>
-                <p>
-                  Click "Re-cluster" to automatically group similar faces together.
-                </p>
+                <UserIcon />
+                <h3>No unassigned faces</h3>
+                <p>You're all caught up.</p>
               </div>
             ) : (
               clusters.map((cluster) => (
@@ -703,9 +897,9 @@ export function Faces() {
                     <div className="cluster-count">{cluster.face_count} faces</div>
                     <button
                       className="btn btn-small"
-                      onClick={() => handleMergeFaces(cluster.cluster_id)}
+                      onClick={() => handleNameCluster(cluster.cluster_id)}
                     >
-                      Create Person
+                      Name
                     </button>
                   </div>
                 </div>
@@ -799,7 +993,7 @@ export function Faces() {
         <div className="modal-overlay" onClick={() => setShowNameModal(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>Create Person</h3>
+              <h3>Name this person</h3>
               <button
                 className="btn-icon"
                 onClick={() => setShowNameModal(false)}
@@ -809,7 +1003,7 @@ export function Faces() {
             </div>
             <div className="modal-body">
               <p>
-                Creating a person with {selectedFaces.size} face
+                You're naming {selectedFaces.size} face
                 {selectedFaces.size !== 1 ? "s" : ""}.
               </p>
               <input

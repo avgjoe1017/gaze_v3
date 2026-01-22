@@ -1,17 +1,21 @@
 """Library management endpoints."""
 
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..core.scanner import is_scanning, scan_library_background
+from ..core.indexer import stop_indexing
 from ..db.connection import get_db
 from ..middleware.auth import verify_token
+from ..ml.face_detector import get_faces_dir
 from ..utils.logging import get_logger
+from ..utils.paths import get_faiss_dir, get_thumbnails_dir
 
 logger = get_logger(__name__)
 
@@ -183,19 +187,91 @@ async def get_library(library_id: str, _token: str = Depends(verify_token)) -> L
 
 
 @router.delete("/{library_id}")
-async def delete_library(library_id: str, _token: str = Depends(verify_token)) -> dict[str, bool]:
+async def delete_library(
+    library_id: str,
+    delete_files: bool = Query(False),
+    purge_artifacts: bool = Query(True),
+    _token: str = Depends(verify_token),
+) -> dict[str, bool]:
     """Delete a library and all its data."""
+    def is_drive_root(path: Path) -> bool:
+        try:
+            resolved = path.resolve()
+        except Exception:
+            return False
+        if resolved.parent == resolved:
+            return True
+        if resolved.drive:
+            return resolved == Path(f"{resolved.drive}\\")
+        return False
+
+    library_path: str | None = None
+    video_ids: list[str] = []
+    face_crops: list[str] = []
+
     async for db in get_db():
         cursor = await db.execute(
-            "SELECT library_id FROM libraries WHERE library_id = ?",
+            "SELECT library_id, folder_path FROM libraries WHERE library_id = ?",
             (library_id,),
         )
-        if not await cursor.fetchone():
+        row = await cursor.fetchone()
+        if not row:
             raise HTTPException(status_code=404, detail="Library not found")
+
+        library_path = row["folder_path"]
+
+        cursor = await db.execute(
+            "SELECT video_id FROM videos WHERE library_id = ?",
+            (library_id,),
+        )
+        video_rows = await cursor.fetchall()
+        video_ids = [row["video_id"] for row in video_rows]
+
+        if purge_artifacts and video_ids:
+            placeholders = ",".join("?" * len(video_ids))
+            cursor = await db.execute(
+                f"""
+                SELECT crop_path FROM faces
+                WHERE video_id IN ({placeholders}) AND crop_path IS NOT NULL
+                """,
+                video_ids,
+            )
+            face_rows = await cursor.fetchall()
+            face_crops = [row["crop_path"] for row in face_rows if row["crop_path"]]
+
+        for video_id in video_ids:
+            await stop_indexing(video_id)
 
         # Delete library (cascade will handle videos, segments, etc.)
         await db.execute("DELETE FROM libraries WHERE library_id = ?", (library_id,))
         await db.commit()
+
+    if purge_artifacts and video_ids:
+        thumbnails_dir = get_thumbnails_dir()
+        faiss_dir = get_faiss_dir()
+        faces_dir = get_faces_dir()
+
+        for video_id in video_ids:
+            shutil.rmtree(thumbnails_dir / video_id, ignore_errors=True)
+            faiss_path = faiss_dir / f"{video_id}.faiss"
+            if faiss_path.exists():
+                try:
+                    faiss_path.unlink()
+                except OSError:
+                    pass
+
+        for crop_path in face_crops:
+            try:
+                crop_file = Path(crop_path)
+                if crop_file.is_relative_to(faces_dir):
+                    crop_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    if delete_files and library_path:
+        folder = Path(library_path)
+        if folder.exists() and folder.is_dir() and not is_drive_root(folder):
+            shutil.rmtree(folder, ignore_errors=True)
 
         logger.info(f"Deleted library {library_id}")
         return {"success": True}

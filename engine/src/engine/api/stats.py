@@ -59,6 +59,16 @@ class DatabaseStats(BaseModel):
     total_libraries: int
 
 
+class IndexingSummary(BaseModel):
+    """Indexing status summary."""
+
+    total: int
+    indexed: int
+    queued: int
+    processing: int
+    failed: int
+
+
 class FormatBreakdown(BaseModel):
     """Video format breakdown."""
 
@@ -278,3 +288,48 @@ async def get_stats(_token: str = Depends(verify_token)) -> StatsResponse:
         codecs=codecs,
         location=location,
     )
+
+
+@router.get("/stats/indexing", response_model=IndexingSummary)
+async def get_indexing_summary(
+    library_id: str | None = None,
+    _token: str = Depends(verify_token),
+) -> IndexingSummary:
+    """Get indexing status summary for videos (optionally filtered by library)."""
+    async for db in get_db():
+        conditions = ["media_type = 'video'"]
+        params: list[str] = []
+        if library_id:
+            conditions.append("library_id = ?")
+            params.append(library_id)
+
+        where_clause = "WHERE " + " AND ".join(conditions)
+        cursor = await db.execute(
+            f"""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN status = 'DONE' THEN 1 ELSE 0 END) as indexed,
+                SUM(CASE WHEN status = 'QUEUED' THEN 1 ELSE 0 END) as queued,
+                SUM(CASE WHEN status IN (
+                    'EXTRACTING_AUDIO',
+                    'TRANSCRIBING',
+                    'EXTRACTING_FRAMES',
+                    'EMBEDDING',
+                    'DETECTING',
+                    'DETECTING_FACES'
+                ) THEN 1 ELSE 0 END) as processing,
+                SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failed
+            FROM videos
+            {where_clause}
+            """,
+            params,
+        )
+        row = await cursor.fetchone()
+
+        return IndexingSummary(
+            total=row["total"] or 0,
+            indexed=row["indexed"] or 0,
+            queued=row["queued"] or 0,
+            processing=row["processing"] or 0,
+            failed=row["failed"] or 0,
+        )

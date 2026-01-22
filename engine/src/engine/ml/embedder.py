@@ -23,6 +23,32 @@ except ImportError:
 _model_cache: Optional[tuple] = None
 
 
+def _load_openclip_checkpoint(model, checkpoint_path: Path) -> None:
+    """Load a local OpenCLIP checkpoint into the model."""
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    if isinstance(checkpoint, dict):
+        if "state_dict" in checkpoint:
+            state_dict = checkpoint["state_dict"]
+        elif "model" in checkpoint:
+            state_dict = checkpoint["model"]
+        else:
+            state_dict = checkpoint
+    else:
+        raise ValueError("Unexpected OpenCLIP checkpoint format")
+
+    cleaned_state = {}
+    for key, value in state_dict.items():
+        if key.startswith("module."):
+            key = key[7:]
+        cleaned_state[key] = value
+
+    missing, unexpected = model.load_state_dict(cleaned_state, strict=False)
+    if missing:
+        logger.warning(f"OpenCLIP checkpoint missing keys: {len(missing)}")
+    if unexpected:
+        logger.warning(f"OpenCLIP checkpoint unexpected keys: {len(unexpected)}")
+
+
 def _load_model(model_name: str = "ViT-B-32", pretrained: str = "laion2b_s34b_b79k") -> tuple:
     """Load and cache OpenCLIP model."""
     global _model_cache
@@ -42,10 +68,10 @@ def _load_model(model_name: str = "ViT-B-32", pretrained: str = "laion2b_s34b_b7
         if model_path.exists():
             logger.debug(f"Loading OpenCLIP model from {model_path}")
             try:
-                # Load model with custom checkpoint path
                 model, _, preprocess = open_clip.create_model_and_transforms(
-                    model_name, pretrained=str(model_path)
+                    model_name, pretrained=None
                 )
+                _load_openclip_checkpoint(model, model_path)
             except Exception as e:
                 logger.warning(f"Failed to load from {model_path}, using default: {e}")
                 # Fallback to default pretrained

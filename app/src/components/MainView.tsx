@@ -237,6 +237,14 @@ interface Video {
   error_message?: string;
 }
 
+interface IndexingSummary {
+  total: number;
+  indexed: number;
+  queued: number;
+  processing: number;
+  failed: number;
+}
+
 interface MediaItem {
   media_id: string;
   library_id: string;
@@ -454,6 +462,7 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
   const [videos, setVideos] = useState<Video[]>([]);
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [mediaLoading, setMediaLoading] = useState(false);
+  const [indexingSummary, setIndexingSummary] = useState<IndexingSummary | null>(null);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -614,6 +623,21 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
     }
   }, [selectedLibrary, isSearching, mediaTypeFilter, dateFrom, dateTo, locationOnly]);
 
+  useEffect(() => {
+    if (!showStatusPanel) return;
+    let intervalId: number | null = null;
+    const refresh = () => {
+      fetchIndexingSummary(selectedLibrary);
+    };
+    refresh();
+    intervalId = window.setInterval(refresh, 2000);
+    return () => {
+      if (intervalId) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [showStatusPanel, selectedLibrary]);
+
   // Refresh libraries and videos when scan completes
   useEffect(() => {
     if (!scanProgress) return;
@@ -707,6 +731,21 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
       setVideos(data.videos || []);
     } catch (err) {
       console.error("Failed to fetch videos:", err);
+    }
+  };
+
+  const fetchIndexingSummary = async (libraryId: string | null) => {
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      const params = new URLSearchParams();
+      if (libraryId && libraryId !== ALL_LIBRARIES_ID) {
+        params.set("library_id", libraryId);
+      }
+      const endpoint = params.toString() ? `/stats/indexing?${params.toString()}` : "/stats/indexing";
+      const data = await apiRequest<IndexingSummary>(endpoint);
+      setIndexingSummary(data);
+    } catch (err) {
+      console.error("Failed to fetch indexing summary:", err);
     }
   };
 
@@ -1155,6 +1194,13 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
   const totalItems = activeLibrary
     ? activeLibrary.video_count
     : libraries.reduce((sum, lib) => sum + lib.video_count, 0);
+  const indexedCount = indexingSummary?.indexed ?? videos.filter(v => v.status === "DONE").length;
+  const queuedCount = indexingSummary?.queued ?? videos.filter(v => v.status === "QUEUED").length;
+  const processingCount = indexingSummary?.processing
+    ?? videos.filter(v => !["DONE", "QUEUED", "FAILED", "CANCELLED"].includes(v.status)).length;
+  const failedCount = indexingSummary?.failed ?? videos.filter(v => v.status === "FAILED").length;
+  const queuedItems = videos.filter(v => v.status === "QUEUED").slice(0, 10);
+  const failedItems = videos.filter(v => v.status === "FAILED").slice(0, 10);
   const activeScan = activeLibrary ? getLibraryScan(activeLibrary.library_id) : null;
   const isActiveScanning = activeScan && (activeScan as { type?: string }).type !== "scan_complete";
   const contextLibraryName =
@@ -2391,21 +2437,21 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                 {/* Summary Stats */}
                 <div className="status-summary">
                   <div className="status-stat">
-                    <div className="status-stat-value">{videos.filter(v => v.status === "DONE").length}</div>
+                    <div className="status-stat-value">{indexedCount}</div>
                     <div className="status-stat-label">Indexed</div>
                   </div>
                   <div className="status-stat">
-                    <div className="status-stat-value">{videos.filter(v => v.status === "QUEUED").length}</div>
+                    <div className="status-stat-value">{queuedCount}</div>
                     <div className="status-stat-label">Queued</div>
                   </div>
                   <div className="status-stat">
                     <div className="status-stat-value">
-                      {videos.filter(v => !["DONE", "QUEUED", "FAILED", "CANCELLED"].includes(v.status)).length}
+                      {processingCount}
                     </div>
                     <div className="status-stat-label">Processing</div>
                   </div>
                   <div className="status-stat">
-                    <div className="status-stat-value">{videos.filter(v => v.status === "FAILED").length}</div>
+                    <div className="status-stat-value">{failedCount}</div>
                     <div className="status-stat-label">Failed</div>
                   </div>
                 </div>
@@ -2450,23 +2496,20 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
 
                 {/* Queued Videos */}
                 <div className="status-section">
-                <div className="status-section-title">Queued Items ({videos.filter(v => v.status === "QUEUED").length})</div>
-                {videos.filter(v => v.status === "QUEUED").length === 0 ? (
+                  <div className="status-section-title">Queued Items ({queuedCount})</div>
+                {queuedItems.length === 0 ? (
                     <div className="status-empty">No items in queue</div>
                 ) : (
                     <div className="status-queue-list">
-                      {videos
-                        .filter(v => v.status === "QUEUED")
-                        .slice(0, 10)
-                        .map(video => (
+                      {queuedItems.map(video => (
                           <div key={video.video_id} className="status-queue-item">
                             <FilmIcon />
                             <span>{video.filename}</span>
                           </div>
                         ))}
-                      {videos.filter(v => v.status === "QUEUED").length > 10 && (
+                      {queuedCount > queuedItems.length && (
                         <div className="status-queue-more">
-                          +{videos.filter(v => v.status === "QUEUED").length - 10} more
+                          +{queuedCount - queuedItems.length} more
                         </div>
                       )}
                     </div>
@@ -2474,17 +2517,14 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                 </div>
 
                 {/* Failed Videos */}
-                {videos.filter(v => v.status === "FAILED").length > 0 && (
+                {failedCount > 0 && (
                   <div className="status-section">
                     <div className="status-section-title status-failed">
                       <AlertCircleIcon />
-                      Failed Items ({videos.filter(v => v.status === "FAILED").length})
+                      Failed Items ({failedCount})
                     </div>
                     <div className="status-failed-list">
-                      {videos
-                        .filter(v => v.status === "FAILED")
-                        .slice(0, 10)
-                        .map(video => (
+                      {failedItems.map(video => (
                           <div key={video.video_id} className="status-failed-item">
                             <div className="status-failed-header">
                               <div className="status-failed-name">
@@ -2507,9 +2547,9 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                             )}
                           </div>
                         ))}
-                      {videos.filter(v => v.status === "FAILED").length > 10 && (
+                      {failedCount > failedItems.length && (
                         <div className="status-queue-more">
-                          +{videos.filter(v => v.status === "FAILED").length - 10} more
+                          +{failedCount - failedItems.length} more
                         </div>
                       )}
                     </div>

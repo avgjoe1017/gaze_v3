@@ -101,7 +101,7 @@ export function LogViewer({ port }: LogViewerProps) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `gaze-logs-${new Date().toISOString().slice(0, 10)}.log`;
+    a.download = `safekeeps-vault-logs-${new Date().toISOString().slice(0, 10)}.log`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

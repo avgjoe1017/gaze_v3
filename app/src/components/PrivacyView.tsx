@@ -102,7 +102,7 @@ export function PrivacyView({ offlineMode, onUpdate }: PrivacyViewProps) {
         </div>
         <h2>Private by default. Verifiable every session.</h2>
         <p>
-          Gaze runs on your device, keeps media local, and shows the only outbound requests it makes.
+          SafeKeeps Vault runs on your device, keeps media local, and shows the only outbound requests it makes.
           You can lock networking off entirely.
         </p>
         <div className="privacy-actions">

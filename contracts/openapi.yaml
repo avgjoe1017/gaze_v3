@@ -129,6 +129,24 @@ paths:
               schema:
                 $ref: "#/components/schemas/WipeDerivedDataResponse"
 
+  /maintenance/detect-faces:
+    post:
+      operationId: detectFacesPass
+      summary: Run face-only detection on existing frames
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FaceDetectRequest"
+      responses:
+        "200":
+          description: Face detection started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FaceDetectResponse"
+
   /libraries:
     get:
       operationId: listLibraries
@@ -646,6 +664,24 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StatsResponse"
+
+  /stats/indexing:
+    get:
+      operationId: getIndexingSummary
+      summary: Get indexing status summary
+      parameters:
+        - name: library_id
+          in: query
+          schema:
+            type: string
+          description: Optional library filter
+      responses:
+        "200":
+          description: Indexing status summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexingSummary"
 
   /shutdown:
     post:
@@ -1433,6 +1469,8 @@ components:
           type: integer
         frame_interval_seconds:
           type: number
+        faiss_cache_max:
+          type: integer
         indexing_preset:
           type: string
           enum: [quick, deep]
@@ -1466,6 +1504,8 @@ components:
           type: integer
         frame_interval_seconds:
           type: number
+        faiss_cache_max:
+          type: integer
         indexing_preset:
           type: string
           enum: [quick, deep]
@@ -1575,6 +1615,42 @@ components:
             type: integer
         message:
           type: string
+
+    FaceDetectRequest:
+      type: object
+      properties:
+        library_id:
+          type: string
+          nullable: true
+        video_ids:
+          type: array
+          items:
+            type: string
+        limit:
+          type: integer
+          default: 10
+          minimum: 1
+          maximum: 100
+        include_photos:
+          type: boolean
+          default: true
+
+    FaceDetectResponse:
+      type: object
+      required:
+        - status
+        - started
+        - video_ids
+      properties:
+        status:
+          type: string
+          enum: [started]
+        started:
+          type: integer
+        video_ids:
+          type: array
+          items:
+            type: string
 
     BackupPayload:
       type: object
@@ -1857,6 +1933,26 @@ components:
           $ref: "#/components/schemas/CodecStats"
         location:
           $ref: "#/components/schemas/LocationStats"
+
+    IndexingSummary:
+      type: object
+      required:
+        - total
+        - indexed
+        - queued
+        - processing
+        - failed
+      properties:
+        total:
+          type: integer
+        indexed:
+          type: integer
+        queued:
+          type: integer
+        processing:
+          type: integer
+        failed:
+          type: integer
 
     StorageBreakdown:
       type: object

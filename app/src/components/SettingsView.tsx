@@ -5,6 +5,7 @@ interface SettingsData {
   max_concurrent_jobs: number;
   thumbnail_quality: number;
   frame_interval_seconds: number;
+  faiss_cache_max: number;
   indexing_preset: string;
   transcription_model: string;
   transcription_language: string | null;
@@ -71,6 +72,7 @@ export function SettingsView({ settings, loading, onRefresh, onUpdate }: Setting
     max_concurrent_jobs: settings?.max_concurrent_jobs ?? 2,
     frame_interval_seconds: settings?.frame_interval_seconds ?? 2,
     thumbnail_quality: settings?.thumbnail_quality ?? 85,
+    faiss_cache_max: settings?.faiss_cache_max ?? 8,
   }), [settings]);
 
   const handleUpdate = useCallback(async (update: Partial<SettingsData>) => {
@@ -94,7 +96,7 @@ export function SettingsView({ settings, loading, onRefresh, onUpdate }: Setting
       const link = document.createElement("a");
       const date = new Date().toISOString().slice(0, 10);
       link.href = url;
-      link.download = `gaze-backup-${date}.json`;
+      link.download = `safekeeps-vault-backup-${date}.json`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -253,6 +255,20 @@ export function SettingsView({ settings, loading, onRefresh, onUpdate }: Setting
               max={8}
               defaultValue={numericDraft.max_concurrent_jobs}
               onBlur={(e) => handleUpdate({ max_concurrent_jobs: Number(e.target.value) })}
+            />
+          </div>
+
+          <div className="setting-row input-row">
+            <div>
+              <div className="setting-label">FAISS Cache Size</div>
+              <div className="setting-description">How many visual indexes to keep in memory for faster search.</div>
+            </div>
+            <input
+              type="number"
+              min={1}
+              max={32}
+              defaultValue={numericDraft.faiss_cache_max}
+              onBlur={(e) => handleUpdate({ faiss_cache_max: Number(e.target.value) })}
             />
           </div>
 

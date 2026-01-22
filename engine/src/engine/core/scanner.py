@@ -29,6 +29,15 @@ PHOTO_EXTENSIONS = {
 
 MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | PHOTO_EXTENSIONS
 
+IN_PROGRESS_STATUSES = (
+    "EXTRACTING_AUDIO",
+    "TRANSCRIBING",
+    "EXTRACTING_FRAMES",
+    "EMBEDDING",
+    "DETECTING",
+    "DETECTING_FACES",
+)
+
 
 def compute_fingerprint(path: Path) -> str:
     """
@@ -528,6 +537,73 @@ async def scan_library(library_id: str, folder_path: str, recursive: bool = True
         f"{stats['files_found']} found, {stats['files_new']} new, "
         f"{stats['files_changed']} changed, {stats['files_deleted']} deleted"
     )
+
+    # Resync behavior: ensure all unindexed items are queued for processing
+    async for db in get_db():
+        placeholders = ",".join("?" * len(IN_PROGRESS_STATUSES))
+        # Videos
+        cursor = await db.execute(
+            f"""
+            SELECT COUNT(*) as count
+            FROM videos
+            WHERE library_id = ?
+              AND status != 'DONE'
+              AND status NOT IN ({placeholders})
+            """,
+            (library_id, *IN_PROGRESS_STATUSES),
+        )
+        row = await cursor.fetchone()
+        to_queue_videos = row["count"] if row else 0
+
+        await db.execute(
+            f"""
+            UPDATE videos
+            SET status = 'QUEUED',
+                progress = 0,
+                error_code = NULL,
+                error_message = NULL,
+                last_completed_stage = NULL
+            WHERE library_id = ?
+              AND status != 'DONE'
+              AND status NOT IN ({placeholders})
+            """,
+            (library_id, *IN_PROGRESS_STATUSES),
+        )
+
+        # Media
+        cursor = await db.execute(
+            f"""
+            SELECT COUNT(*) as count
+            FROM media
+            WHERE library_id = ?
+              AND status != 'DONE'
+              AND status NOT IN ({placeholders})
+            """,
+            (library_id, *IN_PROGRESS_STATUSES),
+        )
+        row = await cursor.fetchone()
+        to_queue_media = row["count"] if row else 0
+
+        await db.execute(
+            f"""
+            UPDATE media
+            SET status = 'QUEUED',
+                progress = 0,
+                error_code = NULL,
+                error_message = NULL
+            WHERE library_id = ?
+              AND status != 'DONE'
+              AND status NOT IN ({placeholders})
+            """,
+            (library_id, *IN_PROGRESS_STATUSES),
+        )
+
+        await db.commit()
+
+    if to_queue_videos or to_queue_media:
+        logger.info(
+            f"Resync queued {to_queue_videos} videos and {to_queue_media} media items for indexing"
+        )
 
     # Emit completion event
     await emit_scan_complete(library_id, stats)

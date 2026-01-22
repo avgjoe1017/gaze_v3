@@ -42,6 +42,7 @@ interface SettingsData {
   max_concurrent_jobs: number;
   thumbnail_quality: number;
   frame_interval_seconds: number;
+  faiss_cache_max: number;
   indexing_preset: string;
   transcription_model: string;
   transcription_language: string | null;
@@ -125,8 +126,8 @@ function App() {
           <div className="logo-mark">
             <EyeIcon />
           </div>
-          <span className="logo-text">Gaze</span>
-          <span className="logo-version">v3</span>
+          <span className="logo-text">SafeKeeps</span>
+          <span className="logo-version">Vault</span>
         </div>
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
           {status === "connected" && (
@@ -288,7 +289,7 @@ function App() {
             <p>
               {error
                 ? error
-                : "The Gaze engine is not running. Start it to begin searching your photos and videos."}
+                : "The SafeKeeps Vault engine is not running. Start it to begin searching your photos and videos."}
             </p>
             <button className="btn btn-primary" onClick={startEngine} style={{ marginTop: 24 }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -303,7 +304,7 @@ function App() {
           <div className="center-panel">
             <div className="spinner spinner-large" />
             <h2>Starting Engine</h2>
-            <p>Initializing the Gaze engine. This may take a moment...</p>
+            <p>Initializing the SafeKeeps Vault engine. This may take a moment...</p>
           </div>
         )}
 
@@ -320,7 +321,7 @@ function App() {
             </div>
             <h2>FFmpeg Required</h2>
             <p style={{ maxWidth: 480, lineHeight: 1.6 }}>
-              Gaze requires FFmpeg to process video files. FFmpeg is a free, open-source tool
+              SafeKeeps Vault requires FFmpeg to process video files. FFmpeg is a free, open-source tool
               for handling multimedia content.
             </p>
 
@@ -383,7 +384,7 @@ function App() {
             </div>
 
             <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 20 }}>
-              After installing FFmpeg, restart Gaze to continue.
+              After installing FFmpeg, restart SafeKeeps Vault to continue.
             </p>
 
             <button

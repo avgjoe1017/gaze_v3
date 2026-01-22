@@ -1,6 +1,10 @@
 """Search endpoints."""
 
+from collections import OrderedDict
+import json
+import os
 from pathlib import Path
+from threading import Lock
 from typing import Literal
 
 import numpy as np
@@ -22,6 +26,58 @@ from ..utils.logging import get_logger
 from ..utils.paths import get_faiss_dir
 
 logger = get_logger(__name__)
+
+_FAISS_CACHE_MAX = int(os.environ.get("GAZE_FAISS_CACHE_MAX", "8"))
+_FAISS_INDEX_CACHE: "OrderedDict[str, faiss.Index]" = OrderedDict()
+_FAISS_CACHE_LOCK = Lock()
+
+
+def _set_faiss_cache_max(value: int) -> None:
+    """Update the FAISS cache size and evict if needed."""
+    global _FAISS_CACHE_MAX
+    clamped = max(1, int(value))
+    if clamped == _FAISS_CACHE_MAX:
+        return
+    _FAISS_CACHE_MAX = clamped
+    with _FAISS_CACHE_LOCK:
+        while len(_FAISS_INDEX_CACHE) > _FAISS_CACHE_MAX:
+            evicted, _ = _FAISS_INDEX_CACHE.popitem(last=False)
+            logger.debug(f"FAISS cache evicted: {evicted}")
+
+
+def _get_faiss_index(path: Path):
+    """Load a FAISS index with a small LRU cache to avoid repeated disk reads."""
+    key = str(path)
+    with _FAISS_CACHE_LOCK:
+        cached = _FAISS_INDEX_CACHE.get(key)
+        if cached is not None:
+            _FAISS_INDEX_CACHE.move_to_end(key)
+            logger.debug(f"FAISS cache hit: {key}")
+            return cached
+        logger.debug(f"FAISS cache miss: {key}")
+
+    index = faiss.read_index(key)
+    with _FAISS_CACHE_LOCK:
+        _FAISS_INDEX_CACHE[key] = index
+        _FAISS_INDEX_CACHE.move_to_end(key)
+        while len(_FAISS_INDEX_CACHE) > _FAISS_CACHE_MAX:
+            evicted, _ = _FAISS_INDEX_CACHE.popitem(last=False)
+            logger.debug(f"FAISS cache evicted: {evicted}")
+    return index
+
+
+async def _get_setting(db, key: str, default):
+    cursor = await db.execute(
+        "SELECT value FROM settings WHERE key = ?",
+        (key,),
+    )
+    row = await cursor.fetchone()
+    if row:
+        try:
+            return json.loads(row["value"])
+        except Exception:
+            return row["value"]
+    return default
 
 # COCO object categories that SSDLite can detect
 # Used to determine if a query should use object detection instead of CLIP
@@ -140,6 +196,13 @@ async def search(request: SearchRequest, _token: str = Depends(verify_token)) ->
 
     async for db in get_db():
         label_only = bool(request.labels) and not request.query.strip()
+
+        if request.mode in ("visual", "both"):
+            cache_max = await _get_setting(db, "faiss_cache_max", _FAISS_CACHE_MAX)
+            try:
+                _set_faiss_cache_max(int(cache_max))
+            except Exception:
+                _set_faiss_cache_max(_FAISS_CACHE_MAX)
 
         if label_only:
             placeholders = ",".join("?" * len(request.labels or []))
@@ -388,8 +451,8 @@ async def search(request: SearchRequest, _token: str = Depends(verify_token)) ->
                                 continue
 
                             try:
-                                # Load FAISS index
-                                index = faiss.read_index(str(faiss_path))
+                                # Load FAISS index (cached)
+                                index = _get_faiss_index(faiss_path)
 
                                 # Search for similar frames
                                 distances, indices = index.search(query_embedding, k)

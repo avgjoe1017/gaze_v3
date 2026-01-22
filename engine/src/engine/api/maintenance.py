@@ -1,14 +1,16 @@
 """Maintenance and cleanup endpoints."""
 
+import asyncio
+import json
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..core.indexer import stop_indexing
+from ..core.indexer import process_stage, stop_indexing
 from ..db.connection import get_db
 from ..middleware.auth import verify_token
 from ..ml.face_detector import get_faces_dir
@@ -40,6 +42,19 @@ class WipeDerivedDataResponse(BaseModel):
     cleared_rows: dict[str, int]
     cleared_files: dict[str, int]
     message: str
+
+
+class FaceDetectRequest(BaseModel):
+    library_id: str | None = None
+    video_ids: list[str] | None = None
+    limit: int = 10
+    include_photos: bool = True
+
+
+class FaceDetectResponse(BaseModel):
+    status: Literal["started"]
+    started: int
+    video_ids: list[str]
 
 
 @router.post("/wipe-derived", response_model=WipeDerivedDataResponse)
@@ -117,3 +132,82 @@ async def wipe_derived_data(_token: str = Depends(verify_token)) -> WipeDerivedD
         cleared_files=cleared_files,
         message="Derived data wiped. Re-scan libraries to rebuild indexes.",
     )
+
+
+async def _is_face_recognition_enabled() -> bool:
+    async for db in get_db():
+        cursor = await db.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            ("face_recognition_enabled",),
+        )
+        row = await cursor.fetchone()
+        if row:
+            try:
+                return bool(json.loads(row["value"]))
+            except Exception:
+                return str(row["value"]).lower() == "true"
+    return False
+
+
+async def _run_face_detection(video_id: str, video_path: str, media_type: str) -> None:
+    await process_stage(
+        video_id,
+        Path(video_path),
+        "DETECTING_FACES",
+        job_id=None,
+        media_type=media_type,
+    )
+
+
+@router.post("/detect-faces", response_model=FaceDetectResponse)
+async def detect_faces_pass(
+    request: FaceDetectRequest,
+    _token: str = Depends(verify_token),
+) -> FaceDetectResponse:
+    """Run a face-only detection pass on existing frames."""
+    if not await _is_face_recognition_enabled():
+        raise HTTPException(
+            status_code=400,
+            detail="Face recognition is disabled. Enable it in Settings to run face detection.",
+        )
+
+    limit = max(1, min(int(request.limit or 10), 100))
+
+    async for db in get_db():
+        params: list[object] = []
+        conditions = ["EXISTS (SELECT 1 FROM frames f WHERE f.video_id = v.video_id)"]
+
+        if request.library_id:
+            conditions.append("v.library_id = ?")
+            params.append(request.library_id)
+
+        if request.video_ids:
+            placeholders = ",".join("?" * len(request.video_ids))
+            conditions.append(f"v.video_id IN ({placeholders})")
+            params.extend(request.video_ids)
+
+        if not request.include_photos:
+            conditions.append("v.media_type = 'video'")
+
+        where_clause = "WHERE " + " AND ".join(conditions)
+
+        cursor = await db.execute(
+            f"""
+            SELECT v.video_id, v.path, v.media_type
+            FROM videos v
+            {where_clause}
+            ORDER BY v.created_at_ms DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        )
+        rows = await cursor.fetchall()
+
+    video_ids = []
+    for row in rows:
+        video_id = row["video_id"]
+        video_ids.append(video_id)
+        asyncio.create_task(_run_face_detection(video_id, row["path"], row["media_type"] or "video"))
+
+    logger.info(f"Started face-only detection for {len(video_ids)} items")
+    return FaceDetectResponse(status="started", started=len(video_ids), video_ids=video_ids)

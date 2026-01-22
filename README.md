@@ -1,10 +1,10 @@
-# Gaze V3
+# SafeKeeps Vault
 
 Privacy-first, local-only video search across transcripts, visual content, and detected objects.
 
 ## Overview
 
-Gaze V3 is a desktop application that indexes your local video files and enables powerful multi-modal search:
+SafeKeeps Vault is a desktop application that indexes your local video files and enables powerful multi-modal search:
 
 - **Transcript Search**: Full-text search across speech transcribed by Whisper
 - **Visual Search**: Semantic search using OpenCLIP embeddings
