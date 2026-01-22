@@ -189,23 +189,10 @@ async def get_library(library_id: str, _token: str = Depends(verify_token)) -> L
 @router.delete("/{library_id}")
 async def delete_library(
     library_id: str,
-    delete_files: bool = Query(False),
     purge_artifacts: bool = Query(True),
     _token: str = Depends(verify_token),
 ) -> dict[str, bool]:
     """Delete a library and all its data."""
-    def is_drive_root(path: Path) -> bool:
-        try:
-            resolved = path.resolve()
-        except Exception:
-            return False
-        if resolved.parent == resolved:
-            return True
-        if resolved.drive:
-            return resolved == Path(f"{resolved.drive}\\")
-        return False
-
-    library_path: str | None = None
     video_ids: list[str] = []
     face_crops: list[str] = []
 
@@ -217,8 +204,6 @@ async def delete_library(
         row = await cursor.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Library not found")
-
-        library_path = row["folder_path"]
 
         cursor = await db.execute(
             "SELECT video_id FROM videos WHERE library_id = ?",
@@ -268,13 +253,8 @@ async def delete_library(
             except Exception:
                 pass
 
-    if delete_files and library_path:
-        folder = Path(library_path)
-        if folder.exists() and folder.is_dir() and not is_drive_root(folder):
-            shutil.rmtree(folder, ignore_errors=True)
-
-        logger.info(f"Deleted library {library_id}")
-        return {"success": True}
+    logger.info(f"Deleted library {library_id}")
+    return {"success": True}
 
 
 @router.patch("/{library_id}", response_model=Library)

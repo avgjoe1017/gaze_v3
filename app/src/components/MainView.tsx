@@ -909,13 +909,17 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
 
   const handleRemoveLibrary = async (library: Library) => {
     if (library.library_id === ALL_LIBRARIES_ID) return;
-    const confirmed = confirm(`Remove "${getLibraryName(library)}"? This deletes its indexed data.`);
+    const confirmed = confirm(
+      `Remove "${getLibraryName(library)}"? This removes it from SafeKeeps Vault and deletes indexed data.`
+    );
     if (!confirmed) return;
 
     setLibraryAction({ id: library.library_id, action: "delete" });
     try {
       const { apiRequest } = await import("../lib/apiClient");
-      await apiRequest(`/libraries/${library.library_id}`, { method: "DELETE" });
+      await apiRequest(`/libraries/${library.library_id}?purge_artifacts=true`, {
+        method: "DELETE",
+      });
       fetchLibraries();
     } catch (err) {
       console.error("Failed to remove library:", err);
