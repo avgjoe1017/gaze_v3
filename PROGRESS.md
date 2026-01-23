@@ -2236,3 +2236,22 @@ Hardened Tauri engine lifecycle/auth and expanded the media browser UI with view
 
 ### Notes
 - “Open file/folder” actions are **desktop-only** (Tauri). They are disabled in browser mode.
+
+---
+
+## 2026-01-23 - SafeKeeps Vault UX Polish & Indexing Checkpoint
+
+**Time:** Morning review (after the websocket and indexing issues surfaced)
+
+**Summary/Decisions:**
+- Reframed the media experience around the SafeKeeps Vault brand: the People hub now puts **FAVORITES** ahead of **PEOPLE**, uses iOS-style always-visible checkbox squares at the top-left corner of every person card, and keeps unassigned faces strictly on the dedicated unassigned view (clusters stay together so duplicate face tiles are avoided). Selection squares are smaller, controller-free, and persist without hover. The “select” toggle on the page-level header was removed, and the overall aesthetic shifts toward a calm, trustworthy Apple Photos-inspired feel (no drop shadows, three-dot overflow menus, and media cards showing only overlay status/metadata). The “SafeKeeps Vault” name replaced the working title, reinforcing the family-friendly tone.
+- Engine indexing still reports only 50 items indexed, and logs show repeated `database is locked` errors during visual analysis (e.g., “Visual analysis failed. The video frames could not be processed. Details: database is locked”). Resync must push every unindexed item back into the queue (including failed/locked ones) and surface accurate counts. The media library should not display file names or bottom-detail rows on cards—overlayed frame counts/status badges stay small and located in corners. Action buttons are now nested behind a single three-dot menu to reduce clutter.
+- Database locks during embedding or status updates now trigger an automatic requeue: the video resets to `QUEUED`, progress/cancels are cleared, job history records the lock, and `start_indexing_queued_videos(limit=1)` fires so the same media is retried without user intervention.
+- Added a `/videos/retry-failed/all` endpoint and a "Retry all failed" control inside the Indexing Status panel so failed/cancelled jobs can be reset in one tap and kick off another indexing batch.
+- Progress tracking: the UI modifications focus on clarity (progressive disclosure, left-to-right sidebar, contextual toolbars) while the backend focus is on reliability (database retry helpers, exhaustive queue resubmission, repeated face-clustering, and ensuring unassigned faces always cluster together).
+
+**Next Steps:**
+1. Adjust frame extraction quality to 100% for analysis, ensure we capture a frame every two seconds, and once a video is indexed delete all but the first 15 frames to save space while keeping the needed data for clustering/search.
+2. Enhance resync/job-start logic so that all unindexed items—including previously failed or locked jobs—are re-queued; log the true indexed count so the UI status is accurate, and add retries/reindex passes for failed visual analysis runs.
+3. Confirm the People hub, media library, and selection controls match the calm, trustworthy Apple Photos-inspired layout (three-dot menus, no shadows, overlay status pills) and that instructions about clustering, favorites ordering, and selection squares are enforced.
+4. Continue tracking database lock issues (resolution may involve batching writes or connection retries) and help capture this checkpoint for future handoffs.

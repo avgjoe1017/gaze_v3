@@ -119,10 +119,13 @@ def _silero_vad_segments(
         return []
 
     import wave
+    import numpy as np
 
     with wave.open(str(audio_path), "rb") as wav_file:
         frames = wav_file.readframes(wav_file.getnframes())
-        audio = torch.frombuffer(frames, dtype=torch.int16).float() / 32768.0
+        # Copy buffer to make it writable (avoids PyTorch warning)
+        audio_buf = np.frombuffer(frames, dtype=np.int16).copy()
+        audio = torch.from_numpy(audio_buf).float() / 32768.0
 
     model = _load_silero_model()
     timestamps = get_speech_timestamps(audio, model, sampling_rate=sample_rate)

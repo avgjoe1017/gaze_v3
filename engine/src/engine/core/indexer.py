@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sqlite3
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -150,6 +151,18 @@ async def get_indexer_settings() -> dict[str, object]:
     return defaults
 
 
+async def _run_with_db_retry(action: callable, *, attempts: int = 5, base_delay: float = 0.1):
+    """Run a database action with retries on busy/locked errors."""
+    for attempt in range(attempts):
+        try:
+            return await action()
+        except sqlite3.OperationalError as err:
+            if "locked" in str(err).lower() and attempt < attempts - 1:
+                await asyncio.sleep(base_delay * (attempt + 1))
+                continue
+            raise
+
+
 def get_primary_stage_list(media_type: str, face_recognition_enabled: bool, preset: str) -> list[str]:
     """Return primary indexing stages based on media type and settings."""
     preset = (preset or "deep").lower()
@@ -234,17 +247,51 @@ async def update_video_and_media_state(
         return
 
     async for db in get_db():
-        if video_fields:
-            await db.execute(
-                f"UPDATE videos SET {', '.join(video_fields)} WHERE video_id = ?",
-                (*video_params, video_id),
-            )
-        if media_fields:
-            await db.execute(
-                f"UPDATE media SET {', '.join(media_fields)} WHERE media_id = ?",
-                (*media_params, video_id),
-            )
-        await db.commit()
+        async def _run():
+            if video_fields:
+                await db.execute(
+                    f"UPDATE videos SET {', '.join(video_fields)} WHERE video_id = ?",
+                    (*video_params, video_id),
+                )
+            if media_fields:
+                await db.execute(
+                    f"UPDATE media SET {', '.join(media_fields)} WHERE media_id = ?",
+                    (*media_params, video_id),
+                )
+            await db.commit()
+        await _run_with_db_retry(_run)
+
+
+async def _handle_database_lock_retry(video_id: str, job_id: str | None, stage: str, error: Exception) -> None:
+    """Handle transient database lock errors by requeuing the video for another attempt."""
+    message = f"Database locked while processing {stage}; requeuing video for another attempt. Details: {str(error)}"
+    logger.warning(message)
+
+    await update_video_and_media_state(
+        video_id,
+        status="QUEUED",
+        progress=0.0,
+        last_completed_stage=None,
+        error_code=None,
+        error_message=None,
+    )
+
+    if job_id:
+        async def _mark_job():
+            async for db in get_db():
+                await db.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'FAILED', error_code = 'UNKNOWN_ERROR', error_message = ?
+                    WHERE job_id = ?
+                    """,
+                    (message, job_id),
+                )
+                await db.commit()
+        await _run_with_db_retry(_mark_job)
+
+    # Trigger the next indexing batch in the background so the requeued video is picked up quickly
+    asyncio.create_task(start_indexing_queued_videos(limit=1))
 
 
 async def get_known_person_embeddings() -> dict[str, np.ndarray]:
@@ -380,16 +427,19 @@ async def process_video(video_id: str) -> None:
     job_id = str(uuid.uuid4())
     created_at_ms = int(datetime.now().timestamp() * 1000)
 
-    # Create job record
-    async for db in get_db():
-        await db.execute(
-            """
-            INSERT INTO jobs (job_id, video_id, status, created_at_ms, updated_at_ms)
-            VALUES (?, ?, 'PENDING', ?, ?)
-            """,
-            (job_id, video_id, created_at_ms, created_at_ms),
-        )
-        await db.commit()
+    # Create job record with retry logic
+    async def _create_job():
+        async for db in get_db():
+            await db.execute(
+                """
+                INSERT INTO jobs (job_id, video_id, status, created_at_ms, updated_at_ms)
+                VALUES (?, ?, 'PENDING', ?, ?)
+                """,
+                (job_id, video_id, created_at_ms, created_at_ms),
+            )
+            await db.commit()
+    
+    await _run_with_db_retry(_create_job)
 
     try:
         # Update video status to first stage
@@ -413,17 +463,20 @@ async def process_video(video_id: str) -> None:
             stage = stages[stage_index]
             current_stage = stage
 
-            # Update job status
-            async for db in get_db():
-                await db.execute(
-                    """
-                    UPDATE jobs
-                    SET status = ?, current_stage = ?, updated_at_ms = ?
-                    WHERE job_id = ?
-                    """,
-                    (stage, stage, int(datetime.now().timestamp() * 1000), job_id),
-                )
-                await db.commit()
+            # Update job status with retry logic
+            async def _update_job_status():
+                async for db in get_db():
+                    await db.execute(
+                        """
+                        UPDATE jobs
+                        SET status = ?, current_stage = ?, updated_at_ms = ?
+                        WHERE job_id = ?
+                        """,
+                        (stage, stage, int(datetime.now().timestamp() * 1000), job_id),
+                    )
+                    await db.commit()
+            
+            await _run_with_db_retry(_update_job_status)
 
             # Update video status
             await update_video_and_media_state(
@@ -458,16 +511,19 @@ async def process_video(video_id: str) -> None:
 
         # Mark as DONE (primary indexing complete)
         indexed_at_ms = int(datetime.now().timestamp() * 1000)
-        async for db in get_db():
-            await db.execute(
-                """
-                UPDATE jobs
-                SET status = 'DONE', updated_at_ms = ?
-                WHERE job_id = ?
-                """,
-                (indexed_at_ms, job_id),
-            )
-            await db.commit()
+        async def _mark_job_done():
+            async for db in get_db():
+                await db.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'DONE', updated_at_ms = ?
+                    WHERE job_id = ?
+                    """,
+                    (indexed_at_ms, job_id),
+                )
+                await db.commit()
+        
+        await _run_with_db_retry(_mark_job_done)
 
         await update_video_and_media_state(video_id, status="DONE", progress=1.0, indexed_at_ms=indexed_at_ms)
 
@@ -504,16 +560,19 @@ async def process_video(video_id: str) -> None:
             error_code="CANCELLED",
             error_message=ERROR_CODES["CANCELLED"],
         )
-        async for db in get_db():
-            await db.execute(
-                """
-                UPDATE jobs
-                SET status = 'CANCELLED', error_code = 'CANCELLED', error_message = ?
-                WHERE job_id = ?
-                """,
-                (ERROR_CODES["CANCELLED"], job_id),
-            )
-            await db.commit()
+        async def _cancel_job():
+            async for db in get_db():
+                await db.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'CANCELLED', error_code = 'CANCELLED', error_message = ?
+                    WHERE job_id = ?
+                    """,
+                    (ERROR_CODES["CANCELLED"], job_id),
+                )
+                await db.commit()
+        
+        await _run_with_db_retry(_cancel_job)
 
         await emit_job_failed(
             job_id=job_id,
@@ -534,16 +593,19 @@ async def process_video(video_id: str) -> None:
             error_code=error_code,
             error_message=error_message,
         )
-        async for db in get_db():
-            await db.execute(
-                """
-                UPDATE jobs
-                SET status = 'FAILED', error_code = ?, error_message = ?
-                WHERE job_id = ?
-                """,
-                (error_code, error_message, job_id),
-            )
-            await db.commit()
+        async def _mark_job_failed():
+            async for db in get_db():
+                await db.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'FAILED', error_code = ?, error_message = ?
+                    WHERE job_id = ?
+                    """,
+                    (error_code, error_message, job_id),
+                )
+                await db.commit()
+        
+        await _run_with_db_retry(_mark_job_failed)
 
         await emit_job_failed(
             job_id=job_id,
@@ -552,6 +614,12 @@ async def process_video(video_id: str) -> None:
             error_code=error_code,
             error_message=error_message,
         )
+
+    except sqlite3.OperationalError as e:
+        if "locked" in str(e).lower():
+            await _handle_database_lock_retry(video_id, job_id, current_stage, e)
+            return
+        raise
 
     except Exception as e:
         logger.error(f"Indexing failed for video {video_id}: {e}", exc_info=True)
@@ -580,16 +648,19 @@ async def process_video(video_id: str) -> None:
             error_code=error_code,
             error_message=error_message,
         )
-        async for db in get_db():
-            await db.execute(
-                """
-                UPDATE jobs
-                SET status = 'FAILED', error_code = ?, error_message = ?
-                WHERE job_id = ?
-                """,
-                (error_code, error_message, job_id),
-            )
-            await db.commit()
+        async def _mark_job_failed():
+            async for db in get_db():
+                await db.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'FAILED', error_code = ?, error_message = ?
+                    WHERE job_id = ?
+                    """,
+                    (error_code, error_message, job_id),
+                )
+                await db.commit()
+        
+        await _run_with_db_retry(_mark_job_failed)
 
         await emit_job_failed(
             job_id=job_id,
@@ -687,32 +758,35 @@ async def process_stage(
                 ),
             )
             
-            # Save to database
-            async for db in get_db():
-                # Clear existing segments for this video
-                await db.execute("DELETE FROM transcript_segments WHERE video_id = ?", (video_id,))
-                await db.execute("DELETE FROM transcript_fts WHERE video_id = ?", (video_id,))
-                
-                # Insert segments
-                for seg in segments:
-                    await db.execute(
-                        """
-                        INSERT INTO transcript_segments (video_id, start_ms, end_ms, text, confidence)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (video_id, seg["start_ms"], seg["end_ms"], seg["text"], seg.get("confidence")),
-                    )
+            # Save to database with retry logic
+            async def _save_transcript():
+                async for db in get_db():
+                    # Clear existing segments for this video
+                    await db.execute("DELETE FROM transcript_segments WHERE video_id = ?", (video_id,))
+                    await db.execute("DELETE FROM transcript_fts WHERE video_id = ?", (video_id,))
                     
-                    # Insert into FTS index
-                    await db.execute(
-                        """
-                        INSERT INTO transcript_fts (video_id, start_ms, end_ms, text)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (video_id, seg["start_ms"], seg["end_ms"], seg["text"]),
-                    )
-                
-                await db.commit()
+                    # Insert segments
+                    for seg in segments:
+                        await db.execute(
+                            """
+                            INSERT INTO transcript_segments (video_id, start_ms, end_ms, text, confidence)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (video_id, seg["start_ms"], seg["end_ms"], seg["text"], seg.get("confidence")),
+                        )
+                        
+                        # Insert into FTS index
+                        await db.execute(
+                            """
+                            INSERT INTO transcript_fts (video_id, start_ms, end_ms, text)
+                            VALUES (?, ?, ?, ?)
+                            """,
+                            (video_id, seg["start_ms"], seg["end_ms"], seg["text"]),
+                        )
+                    
+                    await db.commit()
+            
+            await _run_with_db_retry(_save_transcript)
             
             logger.info(f"Transcription completed: {len(segments)} segments for {video_id}")
         except Exception as e:
@@ -745,32 +819,35 @@ async def process_stage(
                 )
                 existing_frames = sorted(thumbnails_dir.glob("frame_*.jpg"))
 
-        # Save frame metadata to database (including colors)
-        async for db in get_db():
-            # Clear existing frames
-            await db.execute("DELETE FROM frames WHERE video_id = ?", (video_id,))
+        # Save frame metadata to database (including colors) with retry logic
+        async def _save_frames():
+            async for db in get_db():
+                # Clear existing frames
+                await db.execute("DELETE FROM frames WHERE video_id = ?", (video_id,))
 
-            # Insert frames with color extraction
-            for idx, frame_path in enumerate(existing_frames):
-                frame_id = f"{video_id}_frame_{idx:06d}"
-                timestamp_ms = 0 if media_type == "photo" else int(idx * frame_interval_seconds * 1000)
+                # Insert frames with color extraction
+                for idx, frame_path in enumerate(existing_frames):
+                    frame_id = f"{video_id}_frame_{idx:06d}"
+                    timestamp_ms = 0 if media_type == "photo" else int(idx * frame_interval_seconds * 1000)
 
-                try:
-                    colors = await extract_dominant_colors(frame_path, num_colors=5)
-                    colors_str = ",".join(colors) if colors else None
-                except Exception as e:
-                    logger.debug(f"Color extraction failed for frame {idx}: {e}")
-                    colors_str = None
+                    try:
+                        colors = await extract_dominant_colors(frame_path, num_colors=5)
+                        colors_str = ",".join(colors) if colors else None
+                    except Exception as e:
+                        logger.debug(f"Color extraction failed for frame {idx}: {e}")
+                        colors_str = None
 
-                await db.execute(
-                    """
-                    INSERT INTO frames (frame_id, video_id, frame_index, timestamp_ms, thumbnail_path, colors)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (frame_id, video_id, idx, timestamp_ms, str(frame_path), colors_str),
-                )
+                    await db.execute(
+                        """
+                        INSERT INTO frames (frame_id, video_id, frame_index, timestamp_ms, thumbnail_path, colors)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (frame_id, video_id, idx, timestamp_ms, str(frame_path), colors_str),
+                    )
 
-            await db.commit()
+                await db.commit()
+        
+        await _run_with_db_retry(_save_frames)
 
         logger.info(f"Frame extraction completed: {len(existing_frames)} frames for {video_id}")
 
@@ -858,23 +935,26 @@ async def process_stage(
                         det.get("bbox_w"), det.get("bbox_h"),
                     ))
 
-            # Batch write all detections in a single transaction
-            async for db in get_db():
-                await db.execute("DELETE FROM detections WHERE video_id = ?", (video_id,))
+            # Batch write all detections in a single transaction with retry logic
+            async def _save_detections():
+                async for db in get_db():
+                    await db.execute("DELETE FROM detections WHERE video_id = ?", (video_id,))
 
-                if all_detections:
-                    await db.executemany(
-                        """
-                        INSERT INTO detections (
-                            video_id, frame_id, timestamp_ms, label, confidence,
-                            bbox_x, bbox_y, bbox_w, bbox_h
+                    if all_detections:
+                        await db.executemany(
+                            """
+                            INSERT INTO detections (
+                                video_id, frame_id, timestamp_ms, label, confidence,
+                                bbox_x, bbox_y, bbox_w, bbox_h
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            all_detections,
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        all_detections,
-                    )
 
-                await db.commit()
+                    await db.commit()
+            
+            await _run_with_db_retry(_save_detections)
 
             logger.info(f"Object detection completed: {len(all_detections)} detections for {video_id}")
         except Exception as e:
@@ -965,36 +1045,39 @@ async def process_stage(
                         face.get("age"), face.get("gender"), matched_person_id, created_at_ms,
                     ))
 
-            # Batch write all faces in a single transaction
-            async for db in get_db():
-                await db.execute("DELETE FROM faces WHERE video_id = ?", (video_id,))
+            # Batch write all faces in a single transaction with retry logic
+            async def _save_faces():
+                async for db in get_db():
+                    await db.execute("DELETE FROM faces WHERE video_id = ?", (video_id,))
 
-                if all_faces_data:
-                    await db.executemany(
-                        """
-                        INSERT INTO faces (
-                            face_id, video_id, frame_id, timestamp_ms,
-                            bbox_x, bbox_y, bbox_w, bbox_h, confidence,
-                            embedding, crop_path, age, gender, person_id, created_at_ms
+                    if all_faces_data:
+                        await db.executemany(
+                            """
+                            INSERT INTO faces (
+                                face_id, video_id, frame_id, timestamp_ms,
+                                bbox_x, bbox_y, bbox_w, bbox_h, confidence,
+                                embedding, crop_path, age, gender, person_id, created_at_ms
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            all_faces_data,
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        all_faces_data,
-                    )
 
-                # Update face counts for any auto-recognized persons
-                if auto_recognized > 0:
-                    await db.execute(
-                        """
-                        UPDATE persons
-                        SET face_count = (SELECT COUNT(*) FROM faces WHERE faces.person_id = persons.person_id),
-                            updated_at_ms = ?
-                        WHERE person_id IN (SELECT DISTINCT person_id FROM faces WHERE video_id = ? AND person_id IS NOT NULL)
-                        """,
-                        (created_at_ms, video_id),
-                    )
+                    # Update face counts for any auto-recognized persons
+                    if auto_recognized > 0:
+                        await db.execute(
+                            """
+                            UPDATE persons
+                            SET face_count = (SELECT COUNT(*) FROM faces WHERE faces.person_id = persons.person_id),
+                                updated_at_ms = ?
+                            WHERE person_id IN (SELECT DISTINCT person_id FROM faces WHERE video_id = ? AND person_id IS NOT NULL)
+                            """,
+                            (created_at_ms, video_id),
+                        )
 
-                await db.commit()
+                    await db.commit()
+            
+            await _run_with_db_retry(_save_faces)
 
             logger.info(
                 f"Face detection completed: {len(all_faces_data)} faces for {video_id} "
@@ -1019,7 +1102,8 @@ async def start_indexing_queued_videos(limit: int = 10) -> dict:
     if available_slots <= 0:
         return {"started": 0, "message": "Max concurrent jobs already running"}
 
-    limit = min(limit, available_slots)
+    # Cap at 1 to avoid SQLite "database is locked" (multiple indexers writing concurrently)
+    limit = min(limit, available_slots, 1)
     logger.info(f"Starting indexing for up to {limit} queued videos")
 
     # Get queued videos

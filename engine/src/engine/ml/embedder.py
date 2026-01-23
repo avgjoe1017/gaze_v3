@@ -61,10 +61,9 @@ def _load_model(model_name: str = "ViT-B-32", pretrained: str = "laion2b_s34b_b7
     if _model_cache is None:
         models_dir = get_models_dir()
         model_path = models_dir / "openclip-vit-b-32.bin"
-        
+
         logger.info(f"Loading OpenCLIP model: {model_name}/{pretrained}")
-        
-        # Try to load from downloaded model file if available
+
         if model_path.exists():
             logger.debug(f"Loading OpenCLIP model from {model_path}")
             try:
@@ -72,18 +71,22 @@ def _load_model(model_name: str = "ViT-B-32", pretrained: str = "laion2b_s34b_b7
                     model_name, pretrained=None
                 )
                 _load_openclip_checkpoint(model, model_path)
+                logger.info(f"OpenCLIP checkpoint loaded from {model_path}")
             except Exception as e:
-                logger.warning(f"Failed to load from {model_path}, using default: {e}")
-                # Fallback to default pretrained
+                logger.warning(
+                    "Failed to load OpenCLIP from %s (%s). Falling back to pretrained=%s.",
+                    model_path,
+                    e,
+                    pretrained,
+                )
                 model, _, preprocess = open_clip.create_model_and_transforms(
                     model_name, pretrained=pretrained
                 )
         else:
-            # Use default pretrained (downloads if needed)
             model, _, preprocess = open_clip.create_model_and_transforms(
                 model_name, pretrained=pretrained
             )
-        
+
         model.eval()
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model = model.to(device)

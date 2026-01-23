@@ -5,6 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from ..core.indexer import start_indexing_queued_videos
 from ..db.connection import get_db
 from ..middleware.auth import verify_token
 from ..utils.logging import get_logger
@@ -244,6 +245,64 @@ async def get_video(video_id: str, _token: str = Depends(verify_token)) -> Video
             indexed_at_ms=row["indexed_at_ms"],
             thumbnail_path=row["thumbnail_path"],
         )
+
+
+
+
+@router.post("/retry-failed/all")
+async def retry_failed_videos(_token: str = Depends(verify_token)) -> dict:
+    """Reset all failed/cancelled videos so they can be re-indexed."""
+    failed_video_ids: list[str] = []
+    async for db in get_db():
+        cursor = await db.execute(
+            """
+            SELECT video_id
+            FROM videos
+            WHERE status IN ('FAILED', 'CANCELLED')
+            """
+        )
+        rows = await cursor.fetchall()
+        failed_video_ids = [row["video_id"] for row in rows]
+        if not failed_video_ids:
+            return {"success": True, "retried": 0, "started": 0}
+
+        placeholders = ",".join("?" * len(failed_video_ids))
+        await db.execute(
+            f"""
+            UPDATE videos
+            SET status = 'QUEUED',
+                progress = 0.0,
+                error_code = NULL,
+                error_message = NULL,
+                last_completed_stage = NULL
+            WHERE video_id IN ({placeholders})
+            """,
+            failed_video_ids,
+        )
+        await db.execute(
+            f"""
+            UPDATE media
+            SET status = 'QUEUED',
+                progress = 0.0,
+                error_code = NULL,
+                error_message = NULL
+            WHERE media_id IN ({placeholders})
+            """,
+            failed_video_ids,
+        )
+        await db.execute(
+            f"""
+            DELETE FROM jobs
+            WHERE video_id IN ({placeholders})
+            """,
+            failed_video_ids,
+        )
+        await db.commit()
+        break
+
+    started = await start_indexing_queued_videos(limit=10)
+    logger.info(f"Requeued {len(failed_video_ids)} failed videos ({started.get('started', 0)} started)")
+    return {"success": True, "retried": len(failed_video_ids), "started": started.get("started", 0)}
 
 
 @router.post("/{video_id}/retry")

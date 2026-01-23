@@ -283,6 +283,18 @@ paths:
               schema:
                 $ref: "#/components/schemas/VideosResponse"
 
+  /videos/retry-failed/all:
+    post:
+      operationId: retryFailedVideos
+      summary: Reset all failed or cancelled videos so indexing can retry
+      responses:
+        "200":
+          description: Videos requeued for indexing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetryFailedResponse"
+
   /media:
     get:
       operationId: listMedia
@@ -1182,6 +1194,20 @@ components:
         status:
           type: string
           enum: [started, already_scanning]
+
+    RetryFailedResponse:
+      type: object
+      required:
+        - success
+        - retried
+        - started
+      properties:
+        success:
+          type: boolean
+        retried:
+          type: integer
+        started:
+          type: integer
 
     Video:
       type: object

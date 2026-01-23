@@ -1,6 +1,8 @@
 """Face management endpoints."""
 
+import asyncio
 import json
+import sqlite3
 import uuid
 from datetime import datetime
 from typing import Literal, Optional
@@ -902,15 +904,30 @@ async def cluster_faces(
                 clusters[new_cluster_id] = [face]
                 cluster_embeddings[new_cluster_id] = embedding
 
-        # Update cluster IDs in database
+        # Update cluster IDs in database using batch operation
+        update_data = []
         for cluster_id, cluster_faces in clusters.items():
             for face in cluster_faces:
-                await db.execute(
+                update_data.append((cluster_id, face["face_id"]))
+        
+        if update_data:
+            async def _update_clusters():
+                await db.executemany(
                     "UPDATE faces SET cluster_id = ? WHERE face_id = ?",
-                    (cluster_id, face["face_id"]),
+                    update_data,
                 )
-
-        await db.commit()
+                await db.commit()
+            
+            # Retry on database locked errors
+            for attempt in range(5):
+                try:
+                    await _update_clusters()
+                    break
+                except sqlite3.OperationalError as err:
+                    if "locked" in str(err).lower() and attempt < 4:
+                        await asyncio.sleep(0.1 * (attempt + 1))
+                        continue
+                    raise
 
         # Build response
         result_clusters = []

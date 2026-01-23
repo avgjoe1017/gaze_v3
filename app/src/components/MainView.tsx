@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode, type MouseEvent } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 // Icons
@@ -209,6 +209,43 @@ const UsersIcon = () => (
     <circle cx="9" cy="7" r="3" />
     <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
     <path d="M16 3.13a3 3 0 0 1 0 5.74" />
+  </svg>
+);
+
+const ShareIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M16 5l6 6-6 6" />
+    <path d="M8 18H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" />
+    <path d="M4 12h12" />
+  </svg>
+);
+
+const InfoIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+    <circle cx="12" cy="12" r="10" />
+    <path d="M12 8v4" />
+    <path d="M12 16h.01" />
+  </svg>
+);
+
+const MoreIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <circle cx="6" cy="12" r="1.5" />
+    <circle cx="12" cy="12" r="1.5" />
+    <circle cx="18" cy="12" r="1.5" />
+  </svg>
+);
+
+const HeartIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+  </svg>
+);
+
+const CameraIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+    <circle cx="12" cy="13" r="4" />
   </svg>
 );
 
@@ -463,6 +500,8 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [mediaLoading, setMediaLoading] = useState(false);
   const [indexingSummary, setIndexingSummary] = useState<IndexingSummary | null>(null);
+  const [viewGranularity, setViewGranularity] = useState<"years" | "months" | "all">("all");
+  const [selectedMediaId, setSelectedMediaId] = useState<string | null>(null);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -473,6 +512,7 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
   const [viewMode, setViewMode] = useState<"grid-sm" | "grid-lg" | "list">("grid-lg");
   const [sortMode, setSortMode] = useState<"newest" | "oldest">("newest");
   const [showPrivacyPanel, setShowPrivacyPanel] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
   const [activePhoto, setActivePhoto] = useState<MediaItem | null>(null);
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [mediaTags, setMediaTags] = useState<Record<string, string[]>>({});
@@ -481,12 +521,15 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
   const [indexingStarting, setIndexingStarting] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [showStatusPanel, setShowStatusPanel] = useState(false);
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [expandedVideos, setExpandedVideos] = useState<Set<string>>(new Set());
   const [activeVideo, setActiveVideo] = useState<(VideoDetails & { timestamp_ms: number }) | null>(null);
   const [playerLoading, setPlayerLoading] = useState(false);
   const [playerError, setPlayerError] = useState<string | null>(null);
   const [apiBaseUrl, setApiBaseUrl] = useState<string>("");
+  const [retryingFailed, setRetryingFailed] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   // Person filtering state
   const [persons, setPersons] = useState<Person[]>([]);
@@ -563,7 +606,22 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
       });
       return updated ? next : prev;
     });
-  }, [scanProgress]);
+    }, [scanProgress]);
+
+  useEffect(() => {
+    if (!selectedMediaId) return;
+    if (!mediaItems.some((item) => item.media_id === selectedMediaId)) {
+      setSelectedMediaId(null);
+    }
+  }, [selectedMediaId, mediaItems]);
+
+  useEffect(() => {
+    if (!menuOpenId) return;
+    if (typeof document === "undefined") return;
+    const handleOutside = () => setMenuOpenId(null);
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [menuOpenId]);
 
 
   // Fetch libraries on mount
@@ -832,6 +890,27 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
     }
   };
 
+  const handleRetryAllFailed = async () => {
+    if (retryingFailed) return;
+    setRetryingFailed(true);
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      const data = await apiRequest<{ success: boolean; retried: number; started: number }>(
+        "/videos/retry-failed/all",
+        { method: "POST" }
+      );
+      console.log("Retry failed videos response:", data);
+      const targetLibrary = selectedLibrary || ALL_LIBRARIES_ID;
+      fetchVideos(targetLibrary);
+      fetchMedia(targetLibrary);
+      fetchIndexingSummary(selectedLibrary);
+    } catch (err) {
+      console.error("Failed to retry failed videos:", err);
+    } finally {
+      setRetryingFailed(false);
+    }
+  };
+
   const handleSyncLibrary = async () => {
     if (!selectedLibrary || selectedLibrary === ALL_LIBRARIES_ID) {
       // Sync all libraries
@@ -1084,6 +1163,31 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
     return items;
   }, [mediaItems, sortMode]);
 
+  const temporalLabel = useMemo(() => {
+    if (!sortedMediaItems.length) return "Moments are being organized";
+    const timestamps = sortedMediaItems
+      .map((item) => getMediaTimestamp(item))
+      .filter(Boolean)
+      .slice(0, 8)
+      .sort((a, b) => a - b);
+    if (!timestamps.length) return "Moments are being organized";
+    const earliest = new Date(timestamps[0]);
+    const latest = new Date(timestamps[timestamps.length - 1]);
+    const monthFormatter = new Intl.DateTimeFormat("en-US", { month: "short" });
+    const dayFormatter = new Intl.DateTimeFormat("en-US", { day: "numeric" });
+    const yearFormatter = new Intl.DateTimeFormat("en-US", { year: "numeric" });
+    if (earliest.getFullYear() === latest.getFullYear()) {
+      if (earliest.getMonth() === latest.getMonth()) {
+        if (earliest.getDate() === latest.getDate()) {
+          return `${monthFormatter.format(earliest)} ${dayFormatter.format(earliest)}, ${yearFormatter.format(latest)}`;
+        }
+        return `${monthFormatter.format(earliest)} ${dayFormatter.format(earliest)}–${dayFormatter.format(latest)}, ${yearFormatter.format(latest)}`;
+      }
+      return `${monthFormatter.format(earliest)} ${dayFormatter.format(earliest)} – ${monthFormatter.format(latest)} ${dayFormatter.format(latest)}, ${yearFormatter.format(latest)}`;
+    }
+    return `${monthFormatter.format(earliest)} ${dayFormatter.format(earliest)}, ${yearFormatter.format(earliest)} – ${monthFormatter.format(latest)} ${dayFormatter.format(latest)}, ${yearFormatter.format(latest)}`;
+  }, [sortedMediaItems]);
+
   const getMediaPath = useCallback(
     (mediaId: string) => {
       const media = mediaItems.find((item) => item.media_id === mediaId);
@@ -1167,6 +1271,28 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
       }
       return next;
     });
+  };
+
+  const handleShareAction = () => {
+    if (!selectedMediaId) return;
+    console.info("Share action triggered for", selectedMediaId);
+  };
+
+  const handleFavoriteAction = () => {
+    if (!selectedMediaId) return;
+    toggleFavorite(selectedMediaId);
+  };
+
+  const handleInfoAction = () => {
+    if (!selectedMediaId) return;
+    const media = mediaItems.find((item) => item.media_id === selectedMediaId);
+    if (media) {
+      setActivePhoto(media);
+    }
+  };
+
+  const handleToolbarSearch = () => {
+    searchInputRef.current?.focus();
   };
 
   const filtersActive =
@@ -1370,34 +1496,27 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
 
   return (
     <div className="main-view">
-      {/* Sidebar */}
+      {/* Sidebar - Apple Gallery Style */}
       <aside className="sidebar">
         <div className="sidebar-header">
-          <div className="sidebar-title">Libraries</div>
-          <button
-            className="btn-icon"
-            onClick={() => setShowStatusPanel(true)}
-            title="View indexing status"
-            style={{ marginTop: -4 }}
-          >
-            <ActivityIcon />
-          </button>
+          <div className="sidebar-title">Library</div>
         </div>
+
+        {/* Global indexing progress bar */}
+        {totalItems > 0 && totalIndexed < totalItems && (
+          <div className="sidebar-progress-global">
+            <div
+              className="sidebar-progress-global-fill"
+              style={{ width: `${Math.round((totalIndexed / totalItems) * 100)}%` }}
+            />
+          </div>
+        )}
 
         <div className="sidebar-content">
           <div className="library-list">
             {libraries.map((lib) => {
               const scan = getLibraryScan(lib.library_id);
               const isScanning = scan && (scan as { type?: string }).type !== "scan_complete";
-              const progressRatio =
-                lib.video_count > 0 ? Math.min(1, lib.indexed_count / lib.video_count) : 0;
-              const progressPercent = Math.round(progressRatio * 100);
-              const ringRadius = 16;
-              const ringCircumference = 2 * Math.PI * ringRadius;
-              const ringDash = `${ringCircumference * progressRatio} ${ringCircumference}`;
-              const lastScanLabel = lastScanTimes[lib.library_id]
-                ? `Last scanned ${formatRelativeTime(lastScanTimes[lib.library_id])}`
-                : "Not scanned yet";
               const busyAction = libraryAction && libraryAction.id === lib.library_id;
 
               return (
@@ -1407,49 +1526,14 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                   onClick={() => setSelectedLibrary(lib.library_id)}
                 >
                   <div className="library-icon">
-                    <svg className="library-progress-ring" viewBox="0 0 40 40" aria-hidden>
-                      <circle cx="20" cy="20" r={ringRadius} />
-                      <circle
-                        cx="20"
-                        cy="20"
-                        r={ringRadius}
-                        style={{ strokeDasharray: ringDash }}
-                      />
-                    </svg>
-                    {isScanning ? <div className="spinner" style={{ width: 18, height: 18 }} /> : <FolderIcon />}
+                    {isScanning ? <div className="spinner" style={{ width: 14, height: 14 }} /> : <FolderIcon />}
                   </div>
                   <div className="library-info">
                     <div className="library-name">{getLibraryName(lib)}</div>
-                    <div className="library-meta">
-                      <span>
-                        {isScanning
-                          ? `Scanning... ${scan?.files_found || 0} files found`
-                          : `Indexed ${lib.indexed_count}/${lib.video_count}`
-                        }
-                      </span>
-                      <div className="library-progress">
-                        <div className="library-progress-bar">
-                          <div className="library-progress-fill" style={{ width: `${progressPercent}%` }} />
-                        </div>
-                        <span>{progressPercent}%</span>
-                      </div>
-                      {!isScanning && <span className="library-meta-sub">{lastScanLabel}</span>}
-                    </div>
+                    <div className="library-badge">{lib.video_count}</div>
                   </div>
                   {lib.library_id !== ALL_LIBRARIES_ID && (
                     <div className="library-actions">
-                      <button
-                        className="btn-icon"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRenameLibrary(lib);
-                        }}
-                        disabled={busyAction}
-                        title="Rename"
-                        type="button"
-                      >
-                        <EditIcon />
-                      </button>
                       <button
                         className="btn-icon"
                         onClick={(e) => {
@@ -1476,66 +1560,23 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                       </button>
                     </div>
                   )}
-                  <div className="library-badge">{isScanning ? scan?.files_new || 0 : lib.video_count}</div>
                 </div>
               );
             })}
 
             {libraries.length === 0 && (
-              <div className="empty-state" style={{ padding: "40px 20px" }}>
-                <div className="empty-state-icon" style={{ width: 56, height: 56, marginBottom: 16 }}>
+              <div className="empty-state" style={{ padding: "32px 16px" }}>
+                <div className="empty-state-icon" style={{ width: 48, height: 48, marginBottom: 12 }}>
                   <FolderIcon />
                 </div>
-                <h3 style={{ fontSize: 14 }}>No libraries</h3>
-                <p style={{ fontSize: 12 }}>Add a folder to get started</p>
+                <h3 style={{ fontSize: 13 }}>No libraries</h3>
+                <p style={{ fontSize: 11 }}>Add a folder to start</p>
               </div>
             )}
           </div>
         </div>
 
         <div className="sidebar-footer">
-          {libraries.length > 0 && (
-            <button
-              className="btn add-library-btn"
-              onClick={handleSyncLibrary}
-              disabled={syncing}
-              style={{ marginBottom: 8, width: "100%" }}
-            >
-              {syncing ? (
-                <>
-                  <div className="spinner" style={{ width: 16, height: 16 }} />
-                  Scanning...
-                </>
-              ) : (
-                <>
-                  <RefreshIcon />
-                  Scan for new files
-                </>
-              )}
-            </button>
-          )}
-          {videos.some((v) => v.status === "QUEUED") && (
-            <button
-              className="btn add-library-btn"
-              onClick={handleStartIndexing}
-              disabled={indexingStarting}
-              style={{ marginBottom: 8, width: "100%" }}
-            >
-              {indexingStarting ? (
-                <>
-                  <div className="spinner" style={{ width: 16, height: 16 }} />
-                  Starting...
-                </>
-              ) : (
-                <>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}>
-                    <polygon points="5 3 19 12 5 21 5 3" fill="currentColor" stroke="none" />
-                  </svg>
-                  Start Indexing
-                </>
-              )}
-            </button>
-          )}
           <button className="btn add-library-btn" onClick={handleAddLibrary}>
             <PlusIcon />
             Add Folder
@@ -1545,117 +1586,84 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
 
       {/* Content Area */}
       <div className="content-area">
-        {/* Search Section */}
+        {/* Gallery Header - Compact */}
         <div className="search-section">
-          {showHero ? (
-            <div className="welcome-row">
-              <div className="welcome-text">
-                <span className="welcome-kicker">Modern Family Library</span>
-                <h2>All your photos and videos, organized and searchable.</h2>
-                <p>
-                  No uploads. Nothing leaves your device. No model training.
-                </p>
-                <div className="welcome-pills">
-                  <span>Local-only</span>
-                  <span>Offline-first</span>
-                  <span>Private by design</span>
-                </div>
-              </div>
-              <div className="welcome-cards">
-                <div className="welcome-card">
-                  <div className="welcome-icon">
-                    <ShieldIcon />
-                  </div>
-                  <div>
-                    <h4>Private by default</h4>
-                    <p>No cloud copies. Nothing leaves your device.</p>
-                  </div>
-                </div>
-                <div className="welcome-card">
-                  <div className="welcome-icon">
-                    <UsersIcon />
-                  </div>
-                  <div>
-                    <h4>Family-ready</h4>
-                    <p>Keep everyone’s memories tidy and easy to find.</p>
-                  </div>
-                </div>
-                <div className="welcome-card">
-                  <div className="welcome-icon">
-                    <SearchIcon />
-                  </div>
-                  <div>
-                    <h4>Smart search</h4>
-                    <p>Find people, places, and moments instantly.</p>
-                  </div>
-                </div>
+          <div className="progressive-header">
+            <div className="hierarchy-row">
+              {/* Gallery title */}
+              <h1 className="gallery-title">
+                {activeLibrary ? getLibraryName(activeLibrary) : "All Photos"}
+              </h1>
+              {/* View controls */}
+              <div className="hierarchy-controls">
+                {[
+                  { id: "years", label: "Years" },
+                  { id: "months", label: "Months" },
+                  { id: "all", label: "All" },
+                ].map((level) => (
+                  <button
+                    key={level.id}
+                    type="button"
+                    className={`hierarchy-pill ${viewGranularity === level.id ? "active" : ""}`}
+                    onClick={() => setViewGranularity(level.id as "years" | "months" | "all")}
+                  >
+                    {level.label}
+                  </button>
+                ))}
               </div>
             </div>
-          ) : (
-            <div className="context-row">
-              <div className="context-main">
-                <span className="welcome-kicker">{contextLibraryName}</span>
-                <h2>Ready for private search.</h2>
-                <p>No uploads. Nothing leaves your device. No model training.</p>
-              </div>
-              <div className="context-meta">
-                <div className="context-status">
-                  <span className="context-label">Status</span>
-                  <span className="context-value">{contextStatus}</span>
-                </div>
-                <button
-                  className="btn btn-ghost btn-small"
-                  onClick={() => setShowPrivacyPanel((prev) => !prev)}
-                  type="button"
-                >
-                  {showPrivacyPanel ? "Hide privacy details" : "Why private?"}
-                </button>
-              </div>
-            </div>
-          )}
-          {!showHero && showPrivacyPanel && (
-            <div className="welcome-cards compact">
-              <div className="welcome-card">
-                <div className="welcome-icon">
-                  <ShieldIcon />
-                </div>
-                <div>
-                  <h4>Private by default</h4>
-                  <p>No cloud copies. Nothing leaves your device.</p>
-                </div>
-              </div>
-              <div className="welcome-card">
-                <div className="welcome-icon">
-                  <UsersIcon />
-                </div>
-                <div>
-                  <h4>Family-ready</h4>
-                  <p>Keep everyone’s memories tidy and easy to find.</p>
-                </div>
-              </div>
-              <div className="welcome-card">
-                <div className="welcome-icon">
-                  <SearchIcon />
-                </div>
-                <div>
-                  <h4>Smart search</h4>
-                  <p>Find people, places, and moments instantly.</p>
-                </div>
-              </div>
-            </div>
-          )}
-          <form onSubmit={handleSearch} className="search-container">
-            <input
-              type="text"
-              className="search-input"
-              placeholder="Search your photos and videos..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            <SearchIcon className="search-icon" />
-          </form>
 
-          <div className="facet-bar">
+            <div className="context-toolbar">
+              {/* Compact search */}
+              <form onSubmit={handleSearch} className="search-container">
+                <input
+                  type="text"
+                  className="search-input"
+                  placeholder="Search..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  ref={searchInputRef}
+                  onFocus={() => setShowFilters(true)}
+                />
+                <SearchIcon className="search-icon" />
+              </form>
+
+              {/* Filter toggle */}
+              <button
+                className={`filter-toggle ${showFilters || hasActiveFilters ? "active" : ""}`}
+                onClick={() => setShowFilters(!showFilters)}
+                type="button"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z" />
+                </svg>
+                Filter
+                {hasActiveFilters && (
+                  <span className="filter-count">
+                    {(searchMode !== "all" ? 1 : 0) +
+                      (mediaTypeFilter !== "all" ? 1 : 0) +
+                      (locationOnly ? 1 : 0) +
+                      (dateFrom ? 1 : 0) +
+                      (dateTo ? 1 : 0) +
+                      selectedPersons.length}
+                  </span>
+                )}
+              </button>
+
+              {/* Status indicator */}
+              <button
+                className="toolbar-status"
+                onClick={() => setShowStatusPanel(true)}
+                type="button"
+              >
+                <span className={`toolbar-status-dot ${processingCount > 0 ? "indexing" : ""}`} />
+                {totalIndexed}/{totalItems}
+              </button>
+            </div>
+          </div>
+
+          {/* Collapsible Filters */}
+          <div className={`facet-bar ${showFilters ? "visible" : ""}`}>
             <div className="facet-group">
               <div className="facet-label">Search in</div>
               <div className="facet-chips">
@@ -1764,7 +1772,7 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                   onClick={() => setMediaTypeFilter("all")}
                   type="button"
                 >
-                  All media
+                  All
                 </button>
                 <button
                   className={`chip ${mediaTypeFilter === "photo" ? "active" : ""}`}
@@ -1786,7 +1794,7 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
             </div>
 
             <div className="facet-group facet-group-wide">
-              <div className="facet-label">Other</div>
+              <div className="facet-label">Date</div>
               <div className="facet-chips">
                 <div className="date-filter">
                   <label>
@@ -1803,7 +1811,7 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                   onClick={() => setLocationOnly(!locationOnly)}
                   type="button"
                 >
-                  Location tagged
+                  Has location
                 </button>
                 {hasActiveFilters && (
                   <button
@@ -1811,7 +1819,7 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                     onClick={clearAllFilters}
                     type="button"
                   >
-                    Clear filters
+                    Clear all
                   </button>
                 )}
               </div>
@@ -2121,23 +2129,119 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                 const status = video?.status ?? item.status;
                 const progress = video?.progress ?? item.progress;
                 const duration = video?.duration_ms ?? item.duration_ms ?? undefined;
-                const photoDate = formatPhotoDate(item.creation_time, item.mtime_ms);
-                const dimensions = item.width && item.height ? `${item.width}×${item.height}` : "—";
-                const camera = item.camera_make || item.camera_model
-                  ? [item.camera_make, item.camera_model].filter(Boolean).join(" ")
-                  : null;
-                const fileSize = formatFileSize(item.file_size);
                 const isFavorite = favoriteIds.has(item.media_id);
-                const tags = mediaTags[item.media_id] || [];
+                const isMenuOpen = menuOpenId === item.media_id;
+                const toggleMenu = (event: MouseEvent<HTMLButtonElement>) => {
+                  event.stopPropagation();
+                  setMenuOpenId(isMenuOpen ? null : item.media_id);
+                };
+                const handleMenuAction =
+                  (action: () => void) => (event: MouseEvent<HTMLButtonElement>) => {
+                    event.stopPropagation();
+                    action();
+                    setMenuOpenId(null);
+                  };
+
+                const statusVariant = isVideo
+                  ? status === "DONE"
+                    ? "complete"
+                    : status === "FAILED"
+                      ? "failed"
+                      : status === "QUEUED"
+                        ? "queued"
+                        : "processing"
+                  : "photo";
+                const statusLabel = isVideo
+                  ? status === "DONE"
+                    ? "Indexed"
+                    : status === "FAILED"
+                      ? "Failed"
+                      : status === "QUEUED"
+                        ? "Queued"
+                        : "Indexing"
+                  : "Photo";
+                const statusIcon = isVideo
+                  ? status === "DONE"
+                    ? <CheckIcon />
+                    : status === "FAILED"
+                      ? <AlertCircleIcon />
+                      : <LoaderIcon />
+                  : <ImageIcon />;
+
+                const overlayContent = (
+                  <div className="media-overlay">
+                    {/* Status dot - only for failed/indexing */}
+                    {status === "FAILED" && <div className={`media-status-pill ${statusVariant}`} />}
+                    {status !== "DONE" && status !== "FAILED" && status !== "QUEUED" && (
+                      <div className="media-indexing-overlay">
+                        <div className="spinner" />
+                      </div>
+                    )}
+                    {status === "QUEUED" && <div className={`media-status-pill ${statusVariant}`} />}
+
+                    {/* Video duration - bottom right */}
+                    {isVideo && duration && (
+                      <span className="video-duration">{formatDuration(duration)}</span>
+                    )}
+
+                    {/* Hover-to-reveal action menu */}
+                    <div className="media-action">
+                      <button
+                        className="media-action-trigger"
+                        type="button"
+                        aria-haspopup="menu"
+                        aria-expanded={isMenuOpen}
+                        onClick={toggleMenu}
+                      >
+                        <MoreIcon />
+                      </button>
+                      {isMenuOpen && (
+                        <div className="media-action-menu">
+                          <button
+                            type="button"
+                            onClick={handleMenuAction(() => handleOpenItem(item.media_id, false))}
+                          >
+                            Open file
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleMenuAction(() => handleOpenItem(item.media_id, true))}
+                          >
+                            Open folder
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleMenuAction(() => handleCopyItemPath(item.media_id))}
+                          >
+                            Copy path
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleMenuAction(() => toggleFavorite(item.media_id))}
+                          >
+                            {isFavorite ? "Unfavorite" : "Favorite"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+
+                const handleCardClick = () => {
+                  setMenuOpenId(null);
+                  setSelectedMediaId(item.media_id);
+                  if (isVideo) {
+                    openPlayer(item.media_id, 0);
+                  } else {
+                    setActivePhoto(item);
+                  }
+                };
+
                 return (
                   <div
                     key={item.media_id}
-                    className={`video-card media-card ${isVideo ? "is-video" : "is-photo"}`}
-                    onClick={
-                      isVideo
-                        ? () => openPlayer(item.media_id, 0)
-                        : () => setActivePhoto(item)
-                    }
+                    className={`video-card media-card ${isVideo ? "is-video" : "is-photo"} ${selectedMediaId === item.media_id ? "selected" : ""}`}
+                    onClick={handleCardClick}
                   >
                     {isVideo ? (
                       <HoverPreview
@@ -2146,19 +2250,7 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                         baseThumbnail={item.thumbnail_path ?? undefined}
                         resolveAssetUrl={resolveAssetUrl}
                         limit={15}
-                        overlay={
-                          <>
-                            <span className="video-duration">{formatDuration(duration)}</span>
-                            {status !== "DONE" && progress > 0 && (
-                              <div className="video-indexing-bar">
-                                <div
-                                  className="video-indexing-fill"
-                                  style={{ width: `${progress * 100}%` }}
-                                />
-                              </div>
-                            )}
-                          </>
-                        }
+                        overlay={overlayContent}
                         placeholder={
                           <div className="video-thumbnail-placeholder">
                             <FilmIcon />
@@ -2174,139 +2266,9 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                             <ImageIcon />
                           </div>
                         )}
-                        <span className="media-type-badge">Photo</span>
+                        {overlayContent}
                       </div>
                     )}
-                    <div className="video-info">
-                      <div className="video-title">{item.filename}</div>
-                      {!isVideo && (
-                        <div className="media-meta">
-                          <span>{photoDate}</span>
-                          <span>{dimensions}</span>
-                          {camera && <span>{camera}</span>}
-                          {item.gps_lat != null && item.gps_lng != null && <span>GPS</span>}
-                        </div>
-                      )}
-                      <div className="video-meta">
-                        {isVideo ? (
-                          <span className={`video-status ${status === "DONE" ? "complete" : "indexing"}`}>
-                            {status === "DONE" ? (
-                              <>
-                                <CheckIcon />
-                                Indexed
-                              </>
-                            ) : (
-                              <>
-                                <LoaderIcon />
-                                {status}
-                              </>
-                            )}
-                          </span>
-                        ) : (
-                          <span className="video-status complete">
-                            <ImageIcon />
-                            Photo
-                          </span>
-                        )}
-                      </div>
-                      {tags.length > 0 && (
-                        <div className="media-tags">
-                          {tags.map((tag) => (
-                            <span key={tag} className="user-tag">
-                              {tag}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      <div className="media-card-actions">
-                        <button
-                          className="btn-icon subtle"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleOpenItem(item.media_id, false);
-                          }}
-                          disabled={!isTauri}
-                          title="Open file"
-                          type="button"
-                        >
-                          <FileIcon />
-                        </button>
-                        <button
-                          className="btn-icon subtle"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleOpenItem(item.media_id, true);
-                          }}
-                          disabled={!isTauri}
-                          title="Open folder"
-                          type="button"
-                        >
-                          <FolderOpenIcon />
-                        </button>
-                        <button
-                          className="btn-icon subtle"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleCopyItemPath(item.media_id);
-                          }}
-                          title="Copy path"
-                          type="button"
-                        >
-                          <CopyIcon />
-                        </button>
-                        <button
-                          className="btn-icon subtle"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleAddTag(item.media_id);
-                          }}
-                          title="Add tag"
-                          type="button"
-                        >
-                          <TagIcon />
-                        </button>
-                        <button
-                          className={`btn-icon subtle ${isFavorite ? "active" : ""}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleFavorite(item.media_id);
-                          }}
-                          title={isFavorite ? "Remove favorite" : "Favorite"}
-                          type="button"
-                        >
-                          <StarIcon filled={isFavorite} />
-                        </button>
-                      </div>
-                      <div className="media-details">
-                        <div className="detail-item">
-                          <span className="detail-label">Date</span>
-                          <span className="detail-value">{photoDate}</span>
-                        </div>
-                        <div className="detail-item">
-                          <span className="detail-label">Size</span>
-                          <span className="detail-value">{fileSize}</span>
-                        </div>
-                        <div className="detail-item">
-                          <span className="detail-label">Resolution</span>
-                          <span className="detail-value">{dimensions}</span>
-                        </div>
-                        <div className="detail-item">
-                          <span className="detail-label">Type</span>
-                          <span className="detail-value">{isVideo ? "Video" : "Photo"}</span>
-                        </div>
-                        {isVideo ? (
-                          <div className="detail-item">
-                            <span className="detail-label">Duration</span>
-                            <span className="detail-value">{formatDuration(duration)}</span>
-                          </div>
-                        ) : (
-                          <div className="detail-item">
-                            <span className="detail-label">Camera</span>
-                            <span className="detail-value">{camera ?? "—"}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
                   </div>
                 );
               })}
@@ -2524,8 +2486,20 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                 {failedCount > 0 && (
                   <div className="status-section">
                     <div className="status-section-title status-failed">
-                      <AlertCircleIcon />
-                      Failed Items ({failedCount})
+                      <div className="status-failed-title">
+                        <AlertCircleIcon />
+                        Failed Items ({failedCount})
+                      </div>
+                      <button
+                        className="retry-all-failed-btn"
+                        type="button"
+                        onClick={handleRetryAllFailed}
+                        disabled={retryingFailed}
+                        title="Retry all failed videos"
+                      >
+                        {retryingFailed ? <LoaderIcon /> : <RetryIcon />}
+                        Retry all
+                      </button>
                     </div>
                     <div className="status-failed-list">
                       {failedItems.map(video => (

@@ -1,0 +1,7 @@
+﻿import sys
+sys.path.append('engine/src')
+from engine.main import create_app
+app = create_app()
+for route in app.routes:
+    if hasattr(route,'path'):
+        print(route.path, route.methods)
