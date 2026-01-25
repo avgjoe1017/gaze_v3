@@ -112,6 +112,51 @@ The API contract is defined in `contracts/openapi.yaml`. Key endpoints:
 - `GET /libraries` - List video libraries
 - `POST /search` - Multi-modal search
 
+## Building for Production
+
+### Prerequisites
+
+1. **Engine Binary**: Build using `scripts/build-engine.ps1` (Windows) or `scripts/build-engine.sh` (macOS/Linux)
+2. **FFmpeg Binaries**: Download using `scripts/download-ffmpeg-binaries.ps1` (Windows) or `scripts/download-ffmpeg-binaries.sh` (macOS/Linux)
+
+### Build Process
+
+**Windows:**
+```powershell
+.\scripts\build-app.ps1
+```
+
+**macOS/Linux:**
+```bash
+./scripts/build-app.sh
+```
+
+The build script will:
+1. Build the Python engine binary
+2. Verify all required binaries are present
+3. Install npm dependencies
+4. Build the Tauri application with bundled binaries
+
+### Verifying Binaries
+
+Before building, verify all binaries are present:
+```powershell
+# Windows
+.\scripts\verify-binaries.ps1
+
+# macOS/Linux
+./scripts/verify-binaries.sh
+```
+
+### FFmpeg Binaries
+
+FFmpeg and FFprobe are bundled as Tauri sidecars. See `app/src-tauri/binaries/README.md` for:
+- Required file names per platform
+- Where to obtain LGPL builds
+- Manual installation instructions
+
+**Important**: Only LGPL builds are used (not GPL-only) for license compliance. See `THIRD_PARTY_NOTICES.md` for licensing details.
+
 ## Architecture Decisions
 
 See [GAZE_V3_ARCHITECTURE.md](./GAZE_V3_ARCHITECTURE.md) for detailed architecture documentation including:

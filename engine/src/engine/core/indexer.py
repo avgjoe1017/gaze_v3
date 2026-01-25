@@ -4,6 +4,7 @@ import asyncio
 import json
 import sqlite3
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -30,7 +31,7 @@ from ..ml.face_detector import (
     compute_face_similarity,
 )
 from ..utils.ffmpeg import extract_audio, extract_frames
-from ..utils.image_thumbnail import create_photo_thumbnail
+from ..utils.image_thumbnail import create_photo_thumbnail, create_grid_thumbnail_from_full, GRID_MAX_DIMENSION, GRID_QUALITY
 from ..utils.logging import get_logger
 from ..utils.paths import get_temp_dir, get_thumbnails_dir, get_faiss_dir
 from ..ws.handler import emit_job_progress, emit_job_complete, emit_job_failed
@@ -60,6 +61,9 @@ PHOTO_PRIMARY_STAGES = [
 # Track active indexing jobs
 _active_jobs: dict[str, asyncio.Task] = {}
 _active_enhanced_jobs: dict[str, asyncio.Task] = {}
+
+# Global pause flag for indexing
+_indexing_paused: bool = False
 
 # Error codes with human-readable messages
 ERROR_CODES = {
@@ -128,6 +132,7 @@ async def get_indexer_settings() -> dict[str, object]:
         "max_concurrent_jobs": 2,
         "face_recognition_enabled": False,
         "indexing_preset": "deep",
+        "prioritize_recent_media": False,
     }
 
     keys = tuple(defaults.keys())
@@ -294,9 +299,268 @@ async def _handle_database_lock_retry(video_id: str, job_id: str | None, stage: 
     asyncio.create_task(start_indexing_queued_videos(limit=1))
 
 
+@dataclass
+class PersonEmbeddingData:
+    """Data for a person's learned embeddings."""
+    person_id: str
+    recognition_mode: str  # 'average', 'reference_only', 'weighted'
+    weighted_embedding: np.ndarray | None  # Weighted average of all faces
+    reference_embeddings: list[np.ndarray]  # Reference face embeddings
+    negative_embeddings: list[np.ndarray]  # Negative example embeddings
+
+
+async def get_learned_person_embeddings() -> dict[str, PersonEmbeddingData]:
+    """
+    Get learned embeddings for all known persons with weights.
+
+    Weights:
+    - reference faces: 3x weight
+    - manual assignments: 2x weight
+    - auto assignments: 1x weight
+    - legacy assignments: 1x weight
+
+    Returns:
+        Dict mapping person_id to PersonEmbeddingData
+    """
+    person_data: dict[str, dict] = {}
+
+    async for db in get_db():
+        # Get recognition mode for all persons
+        cursor = await db.execute(
+            "SELECT person_id, recognition_mode FROM persons"
+        )
+        person_rows = await cursor.fetchall()
+        for row in person_rows:
+            person_data[row["person_id"]] = {
+                "recognition_mode": row["recognition_mode"] or "average",
+                "embeddings": [],
+                "weights": [],
+                "reference_embeddings": [],
+                "negative_embeddings": [],
+            }
+
+        # Get all faces assigned to persons with their assignment sources
+        cursor = await db.execute(
+            """
+            SELECT person_id, embedding, assignment_source
+            FROM faces
+            WHERE person_id IS NOT NULL
+            """
+        )
+        face_rows = await cursor.fetchall()
+
+        for row in face_rows:
+            person_id = row["person_id"]
+            if person_id not in person_data:
+                continue
+
+            embedding = bytes_to_embedding(row["embedding"])
+            source = row["assignment_source"] or "legacy"
+
+            # Assign weight based on source
+            if source == "reference":
+                weight = 3.0
+            elif source == "manual":
+                weight = 2.0
+            else:  # auto, legacy
+                weight = 1.0
+
+            person_data[person_id]["embeddings"].append(embedding)
+            person_data[person_id]["weights"].append(weight)
+
+        # Get reference faces (explicitly marked as canonical)
+        cursor = await db.execute(
+            """
+            SELECT fr.person_id, fr.weight, f.embedding
+            FROM face_references fr
+            JOIN faces f ON fr.face_id = f.face_id
+            """
+        )
+        ref_rows = await cursor.fetchall()
+
+        for row in ref_rows:
+            person_id = row["person_id"]
+            if person_id in person_data:
+                embedding = bytes_to_embedding(row["embedding"])
+                person_data[person_id]["reference_embeddings"].append(embedding)
+
+        # Get negative examples
+        cursor = await db.execute(
+            """
+            SELECT fn.person_id, f.embedding
+            FROM face_negatives fn
+            JOIN faces f ON fn.face_id = f.face_id
+            """
+        )
+        neg_rows = await cursor.fetchall()
+
+        for row in neg_rows:
+            person_id = row["person_id"]
+            if person_id in person_data:
+                embedding = bytes_to_embedding(row["embedding"])
+                person_data[person_id]["negative_embeddings"].append(embedding)
+
+    # Compute weighted average embeddings
+    result = {}
+    for person_id, data in person_data.items():
+        weighted_embedding = None
+        if data["embeddings"]:
+            embeddings = np.array(data["embeddings"])
+            weights = np.array(data["weights"])
+
+            # Weighted average
+            weighted_sum = np.sum(embeddings * weights[:, np.newaxis], axis=0)
+            weighted_embedding = weighted_sum / np.sum(weights)
+            # Normalize
+            weighted_embedding = weighted_embedding / np.linalg.norm(weighted_embedding)
+
+        result[person_id] = PersonEmbeddingData(
+            person_id=person_id,
+            recognition_mode=data["recognition_mode"],
+            weighted_embedding=weighted_embedding,
+            reference_embeddings=data["reference_embeddings"],
+            negative_embeddings=data["negative_embeddings"],
+        )
+
+    return result
+
+
+async def get_pair_thresholds() -> dict[tuple[str, str], float]:
+    """
+    Get pair-specific thresholds for frequently confused person pairs.
+
+    Returns:
+        Dict mapping (person_a_id, person_b_id) tuple to threshold
+        Keys are sorted so (A, B) and (B, A) both map to the same entry
+    """
+    thresholds = {}
+
+    async for db in get_db():
+        cursor = await db.execute(
+            "SELECT person_a_id, person_b_id, threshold FROM person_pair_thresholds"
+        )
+        rows = await cursor.fetchall()
+
+        for row in rows:
+            # Store with sorted key for consistent lookup
+            key = tuple(sorted([row["person_a_id"], row["person_b_id"]]))
+            thresholds[key] = row["threshold"]
+
+    return thresholds
+
+
+def find_best_person_match_learned(
+    face_embedding: np.ndarray,
+    person_embeddings: dict[str, PersonEmbeddingData],
+    pair_thresholds: dict[tuple[str, str], float],
+    base_threshold: float = 0.65,
+) -> tuple[str | None, float, float]:
+    """
+    Find the best matching person using learned embeddings and pair thresholds.
+
+    Args:
+        face_embedding: The face embedding to match
+        person_embeddings: Dict of person_id -> PersonEmbeddingData
+        pair_thresholds: Dict of (person_a, person_b) -> threshold
+        base_threshold: Base minimum similarity threshold
+
+    Returns:
+        Tuple of (person_id, similarity, confidence) or (None, 0.0, 0.0) if no match
+        Confidence is lowered when match is close to second-best (sibling scenario)
+    """
+    scores: list[tuple[str, float]] = []
+
+    for person_id, data in person_embeddings.items():
+        similarity = 0.0
+
+        if data.recognition_mode == "reference_only":
+            # Only compare against reference embeddings
+            if data.reference_embeddings:
+                ref_similarities = [
+                    compute_face_similarity(face_embedding, ref)
+                    for ref in data.reference_embeddings
+                ]
+                similarity = max(ref_similarities)
+            else:
+                # No references, skip this person
+                continue
+        elif data.recognition_mode == "weighted":
+            # Weighted average with extra reference emphasis
+            avg_sim = 0.0
+            if data.weighted_embedding is not None:
+                avg_sim = compute_face_similarity(face_embedding, data.weighted_embedding)
+
+            ref_sim = 0.0
+            if data.reference_embeddings:
+                ref_similarities = [
+                    compute_face_similarity(face_embedding, ref)
+                    for ref in data.reference_embeddings
+                ]
+                ref_sim = max(ref_similarities)
+
+            # Combine: 60% reference (if available), 40% average
+            if data.reference_embeddings:
+                similarity = 0.6 * ref_sim + 0.4 * avg_sim
+            else:
+                similarity = avg_sim
+        else:  # 'average' mode (default)
+            if data.weighted_embedding is not None:
+                similarity = compute_face_similarity(face_embedding, data.weighted_embedding)
+            else:
+                continue
+
+        # Apply negative penalty
+        if data.negative_embeddings:
+            neg_similarities = [
+                compute_face_similarity(face_embedding, neg)
+                for neg in data.negative_embeddings
+            ]
+            max_neg_similarity = max(neg_similarities)
+            # If face is very similar to a negative example, heavily penalize
+            if max_neg_similarity > 0.7:
+                similarity *= (1.0 - max_neg_similarity)
+            elif max_neg_similarity > 0.5:
+                similarity *= (1.0 - 0.5 * max_neg_similarity)
+
+        if similarity > 0:
+            scores.append((person_id, similarity))
+
+    if not scores:
+        return None, 0.0, 0.0
+
+    # Sort by similarity descending
+    scores.sort(key=lambda x: x[1], reverse=True)
+
+    best_person, best_similarity = scores[0]
+
+    # Check pair-specific threshold if we have a second candidate
+    effective_threshold = base_threshold
+    if len(scores) > 1:
+        second_person, second_similarity = scores[1]
+        pair_key = tuple(sorted([best_person, second_person]))
+        if pair_key in pair_thresholds:
+            effective_threshold = max(base_threshold, pair_thresholds[pair_key])
+
+    if best_similarity < effective_threshold:
+        return None, 0.0, 0.0
+
+    # Calculate confidence based on margin to second best
+    confidence = best_similarity
+    if len(scores) > 1:
+        margin = best_similarity - scores[1][1]
+        # Lower confidence when margin is small (ambiguous match)
+        if margin < 0.1:
+            confidence = best_similarity * (0.7 + 3.0 * margin)  # Scale 0.7-1.0 based on margin
+
+    return best_person, best_similarity, confidence
+
+
+# Legacy function for backwards compatibility
 async def get_known_person_embeddings() -> dict[str, np.ndarray]:
     """
     Get average embeddings for all known persons.
+
+    DEPRECATED: Use get_learned_person_embeddings() for learning-aware matching.
 
     Returns:
         Dict mapping person_id to average embedding vector
@@ -341,6 +605,8 @@ def find_best_person_match(
 ) -> tuple[str | None, float]:
     """
     Find the best matching person for a face embedding.
+
+    DEPRECATED: Use find_best_person_match_learned() for learning-aware matching.
 
     Args:
         face_embedding: The face embedding to match
@@ -811,13 +1077,34 @@ async def process_stage(
             existing_frames = [frame_path]
         else:
             existing_frames = list(thumbnails_dir.glob("frame_*.jpg"))
+            # Filter out grid thumbnails from the list
+            existing_frames = [f for f in existing_frames if "_grid" not in f.name]
             if not existing_frames:
                 await extract_frames(
                     video_path,
                     thumbnails_dir,
                     interval_seconds=frame_interval_seconds,
                 )
-                existing_frames = sorted(thumbnails_dir.glob("frame_*.jpg"))
+                existing_frames = sorted(
+                    f for f in thumbnails_dir.glob("frame_*.jpg") if "_grid" not in f.name
+                )
+
+        # Generate ONE grid thumbnail per media item for fast loading in the media grid
+        # Use the first frame for videos, or the photo itself
+        # Name it based on the first frame so frontend can find it (e.g., frame_000001_grid.jpg)
+        if existing_frames:
+            first_frame = existing_frames[0]
+            grid_path = first_frame.with_name(first_frame.stem + "_grid.jpg")
+            if not grid_path.exists():
+                try:
+                    create_grid_thumbnail_from_full(
+                        first_frame,
+                        grid_path,
+                        max_dimension=GRID_MAX_DIMENSION,
+                        quality=GRID_QUALITY,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to create grid thumbnail for {video_id}: {e}")
 
         # Save frame metadata to database (including colors) with retry logic
         async def _save_frames():
@@ -972,9 +1259,10 @@ async def process_stage(
             raise FileNotFoundError(f"No frames found for face detection: {thumbnails_dir}")
 
         try:
-            # Load known person embeddings for auto-recognition
-            known_persons = await get_known_person_embeddings()
-            logger.debug(f"Loaded {len(known_persons)} known persons for auto-recognition")
+            # Load learned person embeddings for auto-recognition
+            learned_persons = await get_learned_person_embeddings()
+            pair_thresholds = await get_pair_thresholds()
+            logger.debug(f"Loaded {len(learned_persons)} known persons for auto-recognition")
 
             # Get frame IDs from database (single connection)
             frame_ids_by_index = {}
@@ -1023,26 +1311,36 @@ async def process_stage(
                     # Convert embedding to bytes for storage
                     embedding_bytes = embedding_to_bytes(face["embedding"])
 
-                    # Auto-recognition: try to match against known persons
+                    # Auto-recognition: try to match against known persons using learned matching
                     matched_person_id = None
-                    if known_persons:
-                        matched_person_id, similarity = find_best_person_match(
+                    assignment_confidence = None
+                    assignment_source = None
+                    assigned_at_ms = None
+
+                    if learned_persons:
+                        matched_person_id, similarity, confidence = find_best_person_match_learned(
                             face["embedding"],
-                            known_persons,
-                            threshold=0.65,  # Conservative threshold for auto-assign
+                            learned_persons,
+                            pair_thresholds,
+                            base_threshold=0.65,  # Conservative threshold for auto-assign
                         )
                         if matched_person_id:
                             auto_recognized += 1
+                            assignment_confidence = confidence
+                            assignment_source = "auto"
+                            assigned_at_ms = created_at_ms
                             logger.debug(
                                 f"Auto-recognized face {face_id} as person {matched_person_id} "
-                                f"(similarity: {similarity:.3f})"
+                                f"(similarity: {similarity:.3f}, confidence: {confidence:.3f})"
                             )
 
                     all_faces_data.append((
                         face_id, video_id, frame_id, timestamp_ms,
                         face["bbox_x"], face["bbox_y"], face["bbox_w"], face["bbox_h"],
                         face["confidence"], embedding_bytes, str(crop_path),
-                        face.get("age"), face.get("gender"), matched_person_id, created_at_ms,
+                        face.get("age"), face.get("gender"), matched_person_id,
+                        assignment_source, assignment_confidence, assigned_at_ms,
+                        created_at_ms,
                     ))
 
             # Batch write all faces in a single transaction with retry logic
@@ -1056,9 +1354,11 @@ async def process_stage(
                             INSERT INTO faces (
                                 face_id, video_id, frame_id, timestamp_ms,
                                 bbox_x, bbox_y, bbox_w, bbox_h, confidence,
-                                embedding, crop_path, age, gender, person_id, created_at_ms
+                                embedding, crop_path, age, gender, person_id,
+                                assignment_source, assignment_confidence, assigned_at_ms,
+                                created_at_ms
                             )
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                             all_faces_data,
                         )
@@ -1076,7 +1376,7 @@ async def process_stage(
                         )
 
                     await db.commit()
-            
+
             await _run_with_db_retry(_save_faces)
 
             logger.info(
@@ -1095,6 +1395,12 @@ async def process_stage(
 
 async def start_indexing_queued_videos(limit: int = 10) -> dict:
     """Start indexing for up to N queued videos."""
+    global _indexing_paused
+    
+    # Check if indexing is paused
+    if _indexing_paused:
+        return {"started": 0, "message": "Indexing is paused"}
+    
     settings = await get_indexer_settings()
     max_jobs = int(settings.get("max_concurrent_jobs", 2))
     active_count = len([t for t in _active_jobs.values() if not t.done()])
@@ -1107,17 +1413,40 @@ async def start_indexing_queued_videos(limit: int = 10) -> dict:
     logger.info(f"Starting indexing for up to {limit} queued videos")
 
     # Get queued videos
+    # Check if we should prioritize recent media
+    settings = await get_indexer_settings()
+    prioritize_recent = settings.get("prioritize_recent_media", False)
+    
     video_ids: list[str] = []
     async for db in get_db():
-        cursor = await db.execute(
-            """
-            SELECT video_id FROM videos
-            WHERE status = 'QUEUED'
-            ORDER BY created_at_ms ASC
-            LIMIT ?
-            """,
-            (limit,),
-        )
+        if prioritize_recent:
+            # Order by mtime_ms DESC (most recently modified first)
+            # Fallback to creation_time if mtime not available
+            cursor = await db.execute(
+                """
+                SELECT video_id FROM videos
+                WHERE status = 'QUEUED'
+                ORDER BY 
+                    CASE 
+                        WHEN mtime_ms IS NOT NULL AND mtime_ms > 0 THEN mtime_ms
+                        WHEN creation_time IS NOT NULL THEN CAST(creation_time AS INTEGER)
+                        ELSE created_at_ms
+                    END DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+        else:
+            # Default: oldest first (FIFO)
+            cursor = await db.execute(
+                """
+                SELECT video_id FROM videos
+                WHERE status = 'QUEUED'
+                ORDER BY created_at_ms ASC
+                LIMIT ?
+                """,
+                (limit,),
+            )
         rows = await cursor.fetchall()
         video_ids = [row["video_id"] for row in rows]
 
@@ -1143,8 +1472,14 @@ async def start_indexing_queued_videos(limit: int = 10) -> dict:
 
 async def auto_continue_indexing() -> None:
     """Auto-continue indexing when videos complete."""
+    global _indexing_paused
+    
     while True:
         await asyncio.sleep(5)  # Check every 5 seconds
+        
+        # Skip if paused
+        if _indexing_paused:
+            continue
         
         # Count active jobs
         active_count = len([t for t in _active_jobs.values() if not t.done()])
@@ -1162,6 +1497,25 @@ async def auto_continue_indexing() -> None:
         if queued_count > 0 and active_count == 0:
             logger.info(f"Auto-continuing indexing: {queued_count} videos queued, 0 active")
             await start_indexing_queued_videos(limit=10)
+
+
+def pause_indexing() -> None:
+    """Pause indexing (stops starting new jobs, but doesn't cancel running ones)."""
+    global _indexing_paused
+    _indexing_paused = True
+    logger.info("Indexing paused by user")
+
+
+def resume_indexing() -> None:
+    """Resume indexing."""
+    global _indexing_paused
+    _indexing_paused = False
+    logger.info("Indexing resumed by user")
+
+
+def is_indexing_paused() -> bool:
+    """Check if indexing is paused."""
+    return _indexing_paused
 
 
 async def stop_indexing(video_id: Optional[str] = None) -> dict:
@@ -1198,13 +1552,33 @@ async def _run_enhanced_indexing(
 ) -> None:
     """Run enhanced indexing stages quietly in the background."""
     try:
-        for stage in stages:
+        # Look up actual media type from database
+        media_type = "video"  # default
+        async for db in get_db():
+            cursor = await db.execute(
+                "SELECT media_type FROM videos WHERE video_id = ?",
+                (video_id,),
+            )
+            row = await cursor.fetchone()
+            if row:
+                media_type = row["media_type"]
+        
+        # Filter stages based on media type
+        # Skip audio/transcription stages for photos
+        audio_stages = {"EXTRACTING_AUDIO", "TRANSCRIBING"}
+        filtered_stages = stages
+        if media_type != "video":
+            filtered_stages = [s for s in stages if s not in audio_stages]
+            if len(filtered_stages) < len(stages):
+                logger.debug(f"Skipping audio stages for {media_type} {video_id}")
+        
+        for stage in filtered_stages:
             await process_stage(
                 video_id,
                 video_path,
                 stage,
                 job_id=None,
-                media_type="video",
+                media_type=media_type,
             )
     except asyncio.CancelledError:
         logger.info(f"Enhanced indexing cancelled for video {video_id}")
@@ -1225,3 +1599,133 @@ def schedule_enhanced_indexing(video_id: str, video_path: Path, stages: list[str
         _active_enhanced_jobs.pop(video_id, None)
 
     task.add_done_callback(cleanup)
+
+
+async def regenerate_grid_thumbnails() -> dict:
+    """
+    Regenerate grid thumbnails for all existing indexed media.
+
+    Creates small, fast-loading thumbnails (256px, 50% quality) for media
+    that doesn't already have grid thumbnails. One thumbnail per media item.
+    """
+    thumbnails_dir = get_thumbnails_dir()
+    generated = 0
+    skipped = 0
+    errors = 0
+
+    logger.info("Starting grid thumbnail regeneration")
+
+    # Find all video/media directories in thumbnails folder
+    for video_dir in thumbnails_dir.iterdir():
+        if not video_dir.is_dir():
+            continue
+
+        # Find the first frame (excluding existing grid thumbnails)
+        frames = sorted(
+            f for f in video_dir.glob("frame_*.jpg") 
+            if "_grid" not in f.name
+        )
+
+        if not frames:
+            skipped += 1
+            continue
+
+        # Use the first frame to create the grid thumbnail
+        # Name it based on the first frame so frontend can find it (e.g., frame_000001_grid.jpg)
+        first_frame = frames[0]
+        grid_path = first_frame.with_name(first_frame.stem + "_grid.jpg")
+
+        # Skip if grid thumbnail already exists
+        if grid_path.exists():
+            skipped += 1
+            continue
+
+        try:
+            create_grid_thumbnail_from_full(
+                first_frame,
+                grid_path,
+                max_dimension=GRID_MAX_DIMENSION,
+                quality=GRID_QUALITY,
+            )
+            generated += 1
+
+            # Log progress periodically
+            if generated % 10 == 0:
+                logger.info(f"Grid thumbnails: {generated} generated, {skipped} skipped")
+
+        except Exception as e:
+            logger.warning(f"Failed to create grid thumbnail for {first_frame}: {e}")
+            errors += 1
+
+    logger.info(
+        f"Grid thumbnail regeneration complete: {generated} generated, "
+        f"{skipped} skipped, {errors} errors"
+    )
+
+    return {"generated": generated, "skipped": skipped, "errors": errors}
+
+
+async def upgrade_to_deep_indexing(library_id: str | None = None) -> dict:
+    """
+    Upgrade already-indexed videos from quick to deep mode.
+
+    Runs enhanced stages (object detection, face detection, transcription)
+    on videos that were previously indexed with 'quick' preset.
+    """
+    upgraded = 0
+    skipped = 0
+
+    indexer_settings = await get_indexer_settings()
+    face_recognition_enabled = bool(indexer_settings.get("face_recognition_enabled", False))
+
+    async for db in get_db():
+
+        # Find videos that are DONE but may not have enhanced stages completed
+        query = """
+            SELECT v.video_id, v.path, v.last_completed_stage, v.media_type
+            FROM videos v
+            WHERE v.status = 'DONE'
+        """
+        params: list[object] = []
+
+        if library_id:
+            query += " AND v.library_id = ?"
+            params.append(library_id)
+
+        cursor = await db.execute(query, params)
+        rows = await cursor.fetchall()
+
+        for row in rows:
+            video_id = row["video_id"]
+            video_path = Path(row["path"])
+            last_stage = row["last_completed_stage"]
+            media_type = row["media_type"] or "video"
+
+            # Check if video file still exists
+            if not video_path.exists():
+                skipped += 1
+                continue
+
+            # Determine which stages need to be run
+            stages_to_run: list[str] = []
+
+            # Check if detection was done (for quick->deep upgrade)
+            if last_stage not in ["DETECTING", "DETECTING_FACES", "TRANSCRIBING"]:
+                stages_to_run.append("DETECTING")
+                if face_recognition_enabled:
+                    stages_to_run.append("DETECTING_FACES")
+            elif last_stage == "DETECTING" and face_recognition_enabled:
+                stages_to_run.append("DETECTING_FACES")
+
+            # Only run audio/transcription on videos
+            if media_type == "video":
+                stages_to_run.extend(VIDEO_ENHANCED_STAGES)
+
+            if stages_to_run:
+                schedule_enhanced_indexing(video_id, video_path, stages_to_run)
+                upgraded += 1
+            else:
+                skipped += 1
+
+    logger.info(f"Deep upgrade started: {upgraded} videos queued, {skipped} skipped")
+    return {"upgraded": upgraded, "skipped": skipped}

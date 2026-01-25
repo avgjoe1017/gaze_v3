@@ -17,19 +17,36 @@ logger = get_logger(__name__)
 
 
 def check_ffmpeg_available() -> tuple[bool, str | None]:
-    """Check if FFmpeg is available in PATH.
+    """Check if FFmpeg is available.
+    
+    Checks in order:
+    1. GAZE_FFMPEG_PATH environment variable (bundled sidecar)
+    2. PATH (system installation)
 
     Returns:
         Tuple of (is_available, version_string or None)
     """
-    ffmpeg_path = shutil.which("ffmpeg")
+    # Check environment variable first (bundled sidecar)
+    ffmpeg_path = os.environ.get("GAZE_FFMPEG_PATH")
+    
+    # Fallback to PATH if env var not set
     if not ffmpeg_path:
-        logger.warning("FFmpeg not found in PATH")
-        return False, None
+        ffmpeg_path = shutil.which("ffmpeg")
+        if not ffmpeg_path:
+            logger.warning("FFmpeg not found in GAZE_FFMPEG_PATH or PATH")
+            return False, None
+    else:
+        # Verify the env var path exists
+        if not Path(ffmpeg_path).exists():
+            logger.warning(f"FFmpeg path from GAZE_FFMPEG_PATH does not exist: {ffmpeg_path}")
+            # Fallback to PATH
+            ffmpeg_path = shutil.which("ffmpeg")
+            if not ffmpeg_path:
+                return False, None
 
     try:
         result = subprocess.run(
-            ["ffmpeg", "-version"],
+            [ffmpeg_path, "-version"],
             capture_output=True,
             text=True,
             timeout=5
@@ -37,7 +54,8 @@ def check_ffmpeg_available() -> tuple[bool, str | None]:
         # Extract version from first line, e.g., "ffmpeg version 6.0 ..."
         version_line = result.stdout.split("\n")[0] if result.stdout else ""
         version = version_line.replace("ffmpeg version ", "").split(" ")[0] if version_line else "unknown"
-        logger.info(f"FFmpeg found: {version} at {ffmpeg_path}")
+        source = "bundled" if os.environ.get("GAZE_FFMPEG_PATH") else "system"
+        logger.info(f"FFmpeg found ({source}): {version} at {ffmpeg_path}")
         return True, version
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
         logger.warning(f"FFmpeg check failed: {e}")
@@ -45,26 +63,44 @@ def check_ffmpeg_available() -> tuple[bool, str | None]:
 
 
 def check_ffprobe_available() -> tuple[bool, str | None]:
-    """Check if FFprobe is available in PATH.
+    """Check if FFprobe is available.
+    
+    Checks in order:
+    1. GAZE_FFPROBE_PATH environment variable (bundled sidecar)
+    2. PATH (system installation)
 
     Returns:
         Tuple of (is_available, version_string or None)
     """
-    ffprobe_path = shutil.which("ffprobe")
+    # Check environment variable first (bundled sidecar)
+    ffprobe_path = os.environ.get("GAZE_FFPROBE_PATH")
+    
+    # Fallback to PATH if env var not set
     if not ffprobe_path:
-        logger.warning("FFprobe not found in PATH")
-        return False, None
+        ffprobe_path = shutil.which("ffprobe")
+        if not ffprobe_path:
+            logger.warning("FFprobe not found in GAZE_FFPROBE_PATH or PATH")
+            return False, None
+    else:
+        # Verify the env var path exists
+        if not Path(ffprobe_path).exists():
+            logger.warning(f"FFprobe path from GAZE_FFPROBE_PATH does not exist: {ffprobe_path}")
+            # Fallback to PATH
+            ffprobe_path = shutil.which("ffprobe")
+            if not ffprobe_path:
+                return False, None
 
     try:
         result = subprocess.run(
-            ["ffprobe", "-version"],
+            [ffprobe_path, "-version"],
             capture_output=True,
             text=True,
             timeout=5
         )
         version_line = result.stdout.split("\n")[0] if result.stdout else ""
         version = version_line.replace("ffprobe version ", "").split(" ")[0] if version_line else "unknown"
-        logger.info(f"FFprobe found: {version} at {ffprobe_path}")
+        source = "bundled" if os.environ.get("GAZE_FFPROBE_PATH") else "system"
+        logger.info(f"FFprobe found ({source}): {version} at {ffprobe_path}")
         return True, version
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
         logger.warning(f"FFprobe check failed: {e}")
@@ -153,6 +189,7 @@ async def repair_consistency() -> dict[str, int]:
         "EXTRACTING_FRAMES",
         "EMBEDDING",
         "DETECTING",
+        "DETECTING_FACES",
     ]
 
     try:
@@ -202,7 +239,8 @@ async def repair_consistency() -> dict[str, int]:
                     """
                     UPDATE jobs
                     SET status = 'failed',
-                        error = 'Interrupted by crash or shutdown'
+                        error_code = 'UNKNOWN_ERROR',
+                        error_message = 'Interrupted by crash or shutdown'
                     WHERE status IN ('running', 'processing')
                     """
                 )

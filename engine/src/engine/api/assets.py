@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
+from ..db.connection import get_db
 from ..middleware.auth import verify_token, get_auth_token, is_dev_mode
 from ..utils.logging import get_logger
 from ..utils.paths import get_thumbnails_dir, get_data_dir
@@ -51,22 +52,74 @@ def _guess_image_type(file_path: Path) -> str:
     return content_types.get(suffix, "application/octet-stream")
 
 
+async def _get_library_roots() -> list[Path]:
+    """Return resolved library root paths from the database."""
+    roots: list[Path] = []
+    async for db in get_db():
+        cursor = await db.execute(
+            "SELECT folder_path FROM libraries"
+        )
+        rows = await cursor.fetchall()
+        for row in rows:
+            try:
+                root = Path(row["folder_path"]).resolve()
+                roots.append(root)
+            except Exception:
+                continue
+    return roots
+
+
+def _is_path_under_roots(file_path: Path, roots: list[Path]) -> bool:
+    for root in roots:
+        try:
+            if file_path.is_relative_to(root):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 @router.get("/thumbnail")
 async def get_thumbnail(
     path: str = Query(..., description="Absolute thumbnail path"),
+    size: str = Query("grid", description="Thumbnail size: 'grid' (small, fast) or 'full' (large, detailed)"),
     _token: str = Depends(verify_token),
 ) -> FileResponse:
-    """Serve a thumbnail image from the thumbnails directory."""
+    """
+    Serve a thumbnail image from the thumbnails directory.
+
+    Supports two sizes:
+    - 'grid': Small, compressed thumbnails (~256px) for fast grid loading
+    - 'full': Full-size thumbnails (~1280px) for lightbox/detail view
+    """
     thumbnails_dir = get_thumbnails_dir().resolve()
     file_path = Path(path).resolve()
 
     if not file_path.is_relative_to(thumbnails_dir):
         raise HTTPException(status_code=403, detail="Forbidden")
 
+    # If requesting grid size, try to use the _grid variant
+    if size == "grid":
+        grid_path = file_path.with_name(file_path.stem + "_grid.jpg")
+        if grid_path.exists():
+            file_path = grid_path
+        # If grid doesn't exist, fall back to full (will be slower but works)
+
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Thumbnail not found")
 
-    return FileResponse(file_path)
+    # Add aggressive caching headers for thumbnails
+    # Thumbnails don't change once created, so cache for 1 year
+    headers = {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "Vary": "Accept-Encoding",
+    }
+
+    return FileResponse(
+        file_path,
+        headers=headers,
+        media_type="image/jpeg",
+    )
 
 
 @router.get("/face")
@@ -99,6 +152,10 @@ async def get_video(
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     file_path = Path(path).resolve()
+
+    library_roots = await _get_library_roots()
+    if not _is_path_under_roots(file_path, library_roots):
+        raise HTTPException(status_code=403, detail="Forbidden")
 
     logger.info(f"Serving video: {file_path}")
 
@@ -183,6 +240,9 @@ async def get_media(
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     file_path = Path(path).resolve()
+    library_roots = await _get_library_roots()
+    if not _is_path_under_roots(file_path, library_roots):
+        raise HTTPException(status_code=403, detail="Forbidden")
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Media not found")
 

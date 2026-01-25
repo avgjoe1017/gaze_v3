@@ -7,6 +7,7 @@ interface SettingsData {
   frame_interval_seconds: number;
   faiss_cache_max: number;
   indexing_preset: string;
+  prioritize_recent_media: boolean;
   transcription_model: string;
   transcription_language: string | null;
   transcription_backend: string;
@@ -211,13 +212,22 @@ export function SettingsView({ settings, loading, onRefresh, onUpdate }: Setting
           <div className="setting-row">
             <div>
               <div className="setting-label">Face Recognition</div>
-              <div className="setting-description">Opt-in only. Runs locally and never leaves your device.</div>
+              <div className="setting-description">
+                <strong>Faces are derived data.</strong> Face recognition runs locally and never leaves your device. 
+                Face data can be fully removed at any time. This feature is opt-in and disabled by default.
+              </div>
             </div>
             <button
               className={`toggle-switch ${settings.face_recognition_enabled ? "active" : ""}`}
               onClick={() => {
                 if (!settings.face_recognition_enabled) {
-                  const ok = window.confirm("Enable face recognition? This analyzes faces locally.");
+                  const ok = window.confirm(
+                    "Enable face recognition?\n\n" +
+                    "• Faces are derived data (can be fully removed)\n" +
+                    "• All processing happens locally\n" +
+                    "• Face data never leaves your device\n" +
+                    "• You can disable and wipe face data at any time"
+                  );
                   if (!ok) return;
                 }
                 handleUpdate({ face_recognition_enabled: !settings.face_recognition_enabled });
@@ -243,6 +253,19 @@ export function SettingsView({ settings, loading, onRefresh, onUpdate }: Setting
               <option value="quick">Quick</option>
               <option value="deep">Deep</option>
             </select>
+          </div>
+          <div className="setting-row">
+            <div>
+              <div className="setting-label">Prioritize Recent Media</div>
+              <div className="setting-description">Index most recently modified files first, so recent content becomes searchable sooner.</div>
+            </div>
+            <button
+              className={`toggle-switch ${settings.prioritize_recent_media ? "active" : ""}`}
+              onClick={() => handleUpdate({ prioritize_recent_media: !settings.prioritize_recent_media })}
+              aria-pressed={settings.prioritize_recent_media}
+            >
+              <span />
+            </button>
           </div>
           <div className="setting-row input-row">
             <div>

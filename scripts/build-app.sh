@@ -19,25 +19,40 @@ echo -e "\n\033[33m[1/4] Building Python engine...\033[0m"
     exit 1
 }
 
-# Step 2: Verify engine binary exists
-echo -e "\n\033[33m[2/4] Verifying engine binary...\033[0m"
+# Step 2: Verify binaries exist
+echo -e "\n\033[33m[2/4] Verifying binaries...\033[0m"
+BINARIES_DIR="$ROOT_DIR/app/src-tauri/binaries"
+
+# Detect target
 if [[ "$OSTYPE" == "darwin"* ]]; then
     ARCH=$(uname -m)
     if [[ "$ARCH" == "arm64" ]]; then
-        BINARY_NAME="gaze-engine-aarch64-apple-darwin"
+        TARGET="aarch64-apple-darwin"
     else
-        BINARY_NAME="gaze-engine-x86_64-apple-darwin"
+        TARGET="x86_64-apple-darwin"
     fi
 else
-    BINARY_NAME="gaze-engine-x86_64-unknown-linux-gnu"
+    TARGET="x86_64-unknown-linux-gnu"
 fi
 
-BINARY_PATH="$ROOT_DIR/app/src-tauri/binaries/$BINARY_NAME"
-if [ ! -f "$BINARY_PATH" ]; then
-    echo -e "\033[31mEngine binary not found at: $BINARY_PATH\033[0m"
+# Check engine binary
+ENGINE_BINARY="$BINARIES_DIR/gaze-engine-$TARGET"
+if [ ! -f "$ENGINE_BINARY" ]; then
+    echo -e "\033[31m✗ Engine binary not found at: $ENGINE_BINARY\033[0m"
     exit 1
 fi
-echo -e "\033[32mEngine binary found\033[0m"
+echo -e "\033[32m✓ Engine binary found\033[0m"
+
+# Check FFmpeg binaries (warn if missing, but don't fail build)
+FFMPEG_BINARY="$BINARIES_DIR/ffmpeg-$TARGET"
+FFPROBE_BINARY="$BINARIES_DIR/ffprobe-$TARGET"
+if [ ! -f "$FFMPEG_BINARY" ] || [ ! -f "$FFPROBE_BINARY" ]; then
+    echo -e "\033[33m⚠ FFmpeg binaries not found (optional for dev builds)\033[0m"
+    echo -e "\033[33m  Run: scripts/download-ffmpeg-binaries.sh\033[0m"
+    echo -e "\033[33m  Or see: app/src-tauri/binaries/README.md\033[0m"
+else
+    echo -e "\033[32m✓ FFmpeg binaries found\033[0m"
+fi
 
 # Step 3: Install npm dependencies
 echo -e "\n\033[33m[3/4] Installing npm dependencies...\033[0m"

@@ -31,7 +31,12 @@
       "Bash(python -m py_compile:*)",
       "Bash(pip:*)",
       "Bash(npm run build:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(env)",
+      "Bash(Get-Process)",
+      "Bash(Where-Object {$_ProcessName -like \"*python*\"})",
+      "Bash(Select-Object Id, ProcessName, StartTime)",
+      "Bash(sqlite3:*)"
     ]
   }
 }

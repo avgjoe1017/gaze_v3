@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; connect-src 'self' http://localhost:1420 ws://localhost:1420 http://127.0.0.1:* ws://127.0.0.1:*;"
+      "csp": "default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; connect-src 'self' http://127.0.0.1:48100-48199 ws://127.0.0.1:48100-48199; frame-ancestors 'none'; base-uri 'self'; form-action 'none'; navigate-to 'self';"
     }
   },
   "bundle": {
@@ -39,7 +39,9 @@
     ],
     "resources": [],
     "externalBin": [
-      "binaries/gaze-engine"
+      "binaries/gaze-engine",
+      "binaries/ffmpeg",
+      "binaries/ffprobe"
     ],
     "windows": {
       "certificateThumbprint": null,
@@ -47,9 +49,5 @@
       "timestampUrl": ""
     }
   },
-  "plugins": {
-    "shell": {
-      "open": true
-    }
-  }
+  "plugins": {}
 }

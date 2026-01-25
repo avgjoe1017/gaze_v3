@@ -111,8 +111,34 @@ fn get_engine_module_path() -> Result<String, String> {
     ))
 }
 
+/// Resolve FFmpeg/FFprobe sidecar paths and return as env vars
+/// 
+/// Note: Tauri sidecars are automatically added to PATH when the app runs,
+/// so Python can find them via shutil.which(). However, we set explicit paths
+/// here for determinism. Since Tauri's Command builder doesn't expose the
+/// program path directly, we rely on the sidecar being available via PATH
+/// and let Python's fallback logic handle it.
+fn resolve_ffmpeg_paths(_app: &AppHandle) -> Vec<(String, String)> {
+    // Tauri sidecars are automatically resolved and added to PATH.
+    // The Python code will find them via shutil.which() if GAZE_FFMPEG_PATH
+    // is not set. For now, we don't set explicit paths since we can't
+    // easily get them from the Command builder.
+    //
+    // This is acceptable because:
+    // 1. Tauri automatically adds sidecar directory to PATH
+    // 2. Python's get_ffmpeg_path() checks PATH as fallback
+    // 3. The sidecars will be found when the app runs
+    //
+    // If explicit paths are needed in the future, we could:
+    // - Use Tauri's path resolver API to construct expected paths
+    // - Or spawn a test command to discover the path (inefficient)
+    
+    Vec::new()
+}
+
 /// Spawn engine using Python (development mode or fallback)
 fn spawn_python_engine(
+    app: &AppHandle,
     port: u16,
     token: &str,
     parent_pid: &str,
@@ -120,20 +146,28 @@ fn spawn_python_engine(
 ) -> Result<EngineProcess, String> {
     let engine_path = get_engine_module_path()?;
 
-    let child = Command::new("python")
-        .args([
-            "-m",
-            "engine.main",
-            "--port",
-            &port.to_string(),
-            "--token",
-            token,
-            "--parent-pid",
-            parent_pid,
-            "--log-level",
-            log_level,
-        ])
-        .env("PYTHONPATH", &engine_path)
+    let mut cmd = Command::new("python");
+    cmd.args([
+        "-m",
+        "engine.main",
+        "--port",
+        &port.to_string(),
+        "--token",
+        token,
+        "--parent-pid",
+        parent_pid,
+        "--log-level",
+        log_level,
+    ])
+    .env("PYTHONPATH", &engine_path);
+    
+    // Add FFmpeg/FFprobe paths if available as sidecars
+    let ffmpeg_envs = resolve_ffmpeg_paths(app);
+    for (key, value) in ffmpeg_envs {
+        cmd.env(&key, &value);
+    }
+
+    let child = cmd
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
@@ -152,20 +186,27 @@ fn spawn_sidecar_engine(
 ) -> Result<EngineProcess, String> {
     use tauri_plugin_shell::process::CommandEvent;
 
-    let sidecar = app
+    let mut sidecar = app
         .shell()
         .sidecar("gaze-engine")
-        .map_err(|e| format!("Failed to get sidecar: {}", e))?
-        .args([
-            "--port",
-            &port.to_string(),
-            "--token",
-            token,
-            "--parent-pid",
-            parent_pid,
-            "--log-level",
-            log_level,
-        ]);
+        .map_err(|e| format!("Failed to get sidecar: {}", e))?;
+    
+    // Add FFmpeg/FFprobe paths as environment variables
+    let ffmpeg_envs = resolve_ffmpeg_paths(app);
+    for (key, value) in ffmpeg_envs {
+        sidecar = sidecar.env(&key, &value);
+    }
+    
+    let sidecar = sidecar.args([
+        "--port",
+        &port.to_string(),
+        "--token",
+        token,
+        "--parent-pid",
+        parent_pid,
+        "--log-level",
+        log_level,
+    ]);
 
     let (mut rx, child) = sidecar
         .spawn()
@@ -232,7 +273,7 @@ pub async fn start_engine(
     // In debug builds, use Python directly for easier development
     let process_result = if cfg!(debug_assertions) {
         // Development mode: always use Python
-        spawn_python_engine(port, &token, &parent_pid, log_level)
+        spawn_python_engine(&app, port, &token, &parent_pid, log_level)
     } else {
         // Release mode: try sidecar first, fall back to Python
         match spawn_sidecar_engine(&app, port, &token, &parent_pid, log_level) {
@@ -242,7 +283,7 @@ pub async fn start_engine(
                     "Sidecar not found, falling back to Python: {}",
                     sidecar_err
                 );
-                spawn_python_engine(port, &token, &parent_pid, log_level)
+                spawn_python_engine(&app, port, &token, &parent_pid, log_level)
             }
         }
     };

@@ -212,13 +212,7 @@ const UsersIcon = () => (
   </svg>
 );
 
-const ShareIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-    <path d="M16 5l6 6-6 6" />
-    <path d="M8 18H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" />
-    <path d="M4 12h12" />
-  </svg>
-);
+// ShareIcon removed - feature not implemented
 
 const InfoIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
@@ -239,6 +233,18 @@ const MoreIcon = () => (
 const HeartIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+  </svg>
+);
+
+const ChevronLeftIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="15 18 9 12 15 6" />
+  </svg>
+);
+
+const ChevronRightIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="9 6 15 12 9 18" />
   </svg>
 );
 
@@ -307,6 +313,8 @@ interface MediaItem {
   indexed_at_ms?: number | null;
   created_at_ms: number;
   thumbnail_path?: string | null;
+  is_live_photo_component?: number;
+  live_photo_pair_id?: string | null;
 }
 
 interface VideoDetails {
@@ -397,7 +405,7 @@ interface HoverPreviewProps {
   videoId: string;
   className: string;
   baseThumbnail?: string | null;
-  resolveAssetUrl: (path?: string | null) => string;
+  resolveAssetUrl: (path?: string | null, size?: "grid" | "full") => string;
   overlay?: ReactNode;
   placeholder: ReactNode;
   limit?: number;
@@ -470,9 +478,10 @@ const HoverPreview = ({
     setFrameIndex(0);
   };
 
+  // Use grid size for initial view (fast loading), full size for hover preview (better quality)
   const currentSrc = hovering && frames.length > 0
-    ? resolveAssetUrl(frames[frameIndex])
-    : resolveAssetUrl(baseThumbnail) || resolveAssetUrl(frames[0]) || "";
+    ? resolveAssetUrl(frames[frameIndex], "full")
+    : resolveAssetUrl(baseThumbnail, "grid") || resolveAssetUrl(frames[0], "grid") || "";
 
   return (
     <div
@@ -498,6 +507,7 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
   const [selectedLibrary, setSelectedLibrary] = useState<string | null>(null);
   const [videos, setVideos] = useState<Video[]>([]);
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
+  const [groupedMedia, setGroupedMedia] = useState<Record<string, MediaItem[]> | null>(null);
   const [mediaLoading, setMediaLoading] = useState(false);
   const [indexingSummary, setIndexingSummary] = useState<IndexingSummary | null>(null);
   const [viewGranularity, setViewGranularity] = useState<"years" | "months" | "all">("all");
@@ -510,10 +520,14 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
   const [dateTo, setDateTo] = useState("");
   const [locationOnly, setLocationOnly] = useState(false);
   const [viewMode, setViewMode] = useState<"grid-sm" | "grid-lg" | "list">("grid-lg");
+  const [thumbnailSize, setThumbnailSize] = useState<"small" | "medium" | "large">("medium");
   const [sortMode, setSortMode] = useState<"newest" | "oldest">("newest");
   const [showPrivacyPanel, setShowPrivacyPanel] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [activePhoto, setActivePhoto] = useState<MediaItem | null>(null);
+  const [showPhotoInfo, setShowPhotoInfo] = useState(false);
+  const [showVideoInfo, setShowVideoInfo] = useState(false);
+  const [livePhotoComponent, setLivePhotoComponent] = useState<MediaItem | null>(null);
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [mediaTags, setMediaTags] = useState<Record<string, string[]>>({});
   const [lastScanTimes, setLastScanTimes] = useState<Record<string, number>>({});
@@ -521,6 +535,8 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
   const [indexingStarting, setIndexingStarting] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [showStatusPanel, setShowStatusPanel] = useState(false);
+  const [deepUpgrading, setDeepUpgrading] = useState(false);
+  const [regeneratingThumbnails, setRegeneratingThumbnails] = useState(false);
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [expandedVideos, setExpandedVideos] = useState<Set<string>>(new Set());
   const [activeVideo, setActiveVideo] = useState<(VideoDetails & { timestamp_ms: number }) | null>(null);
@@ -550,24 +566,91 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [showPersonPicker]);
 
+  // Load favorites and tags from API on mount
+  useEffect(() => {
+    if (status !== "connected") return;
+
+    async function loadUserData() {
+      try {
+        const { apiRequest } = await import("../lib/apiClient");
+        
+        // Load favorites
+        const favoriteIdsList = await apiRequest<string[]>("/favorites/media");
+        setFavoriteIds(new Set(favoriteIdsList));
+        console.log("Loaded favorites from API:", favoriteIdsList.length, "items");
+
+        // Load tags
+        const tagsResponse = await apiRequest<{ tags: Record<string, string[]> }>("/favorites/tags");
+        setMediaTags(tagsResponse.tags || {});
+        console.log("Loaded tags from API:", Object.keys(tagsResponse.tags || {}).length, "media items");
+
+        // Migrate localStorage data if it exists (one-time migration)
+        if (typeof window !== "undefined") {
+          try {
+            const storedFavorites = window.localStorage.getItem("gaze.favorites");
+            if (storedFavorites) {
+              const parsed = JSON.parse(storedFavorites);
+              if (parsed.length > 0) {
+                console.log("Migrating favorites from localStorage to database...");
+                for (const mediaId of parsed) {
+                  try {
+                    await apiRequest("/favorites/media", {
+                      method: "POST",
+                      body: JSON.stringify({ media_id: mediaId }),
+                    });
+                  } catch (e) {
+                    console.error("Failed to migrate favorite:", mediaId, e);
+                  }
+                }
+                // Reload favorites after migration
+                const migratedFavorites = await apiRequest<string[]>("/favorites/media");
+                setFavoriteIds(new Set(migratedFavorites));
+                // Clear localStorage after successful migration
+                window.localStorage.removeItem("gaze.favorites");
+              }
+            }
+
+            const storedTags = window.localStorage.getItem("gaze.tags");
+            if (storedTags) {
+              const parsed = JSON.parse(storedTags);
+              if (Object.keys(parsed).length > 0) {
+                console.log("Migrating tags from localStorage to database...");
+                for (const [mediaId, tags] of Object.entries(parsed)) {
+                  if (Array.isArray(tags)) {
+                    for (const tag of tags) {
+                      try {
+                        await apiRequest("/favorites/tags", {
+                          method: "POST",
+                          body: JSON.stringify({ media_id: mediaId, tag }),
+                        });
+                      } catch (e) {
+                        console.error("Failed to migrate tag:", mediaId, tag, e);
+                      }
+                    }
+                  }
+                }
+                // Reload tags after migration
+                const migratedTags = await apiRequest<{ tags: Record<string, string[]> }>("/favorites/tags");
+                setMediaTags(migratedTags.tags || {});
+                // Clear localStorage after successful migration
+                window.localStorage.removeItem("gaze.tags");
+              }
+            }
+          } catch (migrationError) {
+            console.error("Failed to migrate localStorage data:", migrationError);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to load user data from API:", error);
+      }
+    }
+
+    loadUserData();
+  }, [status]);
+
+  // Keep lastScanTimes in localStorage (this is UI state, not user meaning data)
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const storedFavorites = window.localStorage.getItem("gaze.favorites");
-    if (storedFavorites) {
-      try {
-        setFavoriteIds(new Set<string>(JSON.parse(storedFavorites)));
-      } catch {
-        setFavoriteIds(new Set());
-      }
-    }
-    const storedTags = window.localStorage.getItem("gaze.tags");
-    if (storedTags) {
-      try {
-        setMediaTags(JSON.parse(storedTags));
-      } catch {
-        setMediaTags({});
-      }
-    }
     const storedScans = window.localStorage.getItem("gaze.lastScans");
     if (storedScans) {
       try {
@@ -578,16 +661,7 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
     }
   }, []);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem("gaze.favorites", JSON.stringify(Array.from(favoriteIds)));
-  }, [favoriteIds]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem("gaze.tags", JSON.stringify(mediaTags));
-  }, [mediaTags]);
-
+  // Keep lastScanTimes in localStorage (this is UI state, not user meaning data)
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem("gaze.lastScans", JSON.stringify(lastScanTimes));
@@ -811,25 +885,32 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
     setMediaLoading(true);
     try {
       const { apiRequest } = await import("../lib/apiClient");
-      const params = new URLSearchParams();
-      if (libraryId !== ALL_LIBRARIES_ID) {
+
+      // Use grouped endpoint for All Libraries view
+      if (libraryId === ALL_LIBRARIES_ID) {
+        const data = await apiRequest<{ groups: Record<string, MediaItem[]>; total: number }>("/media/grouped");
+        setGroupedMedia(data.groups || {});
+        setMediaItems([]); // Clear regular items when showing grouped
+      } else {
+        const params = new URLSearchParams();
         params.set("library_id", libraryId);
+        if (mediaTypeFilter !== "all") {
+          params.set("media_type", mediaTypeFilter);
+        }
+        if (dateFrom) {
+          params.set("date_from", dateFrom);
+        }
+        if (dateTo) {
+          params.set("date_to", dateTo);
+        }
+        if (locationOnly) {
+          params.set("location_only", "true");
+        }
+        const endpoint = params.toString() ? `/media?${params.toString()}` : "/media";
+        const data = await apiRequest<{ media: MediaItem[]; total: number }>(endpoint);
+        setMediaItems(data.media || []);
+        setGroupedMedia(null); // Clear grouped when showing regular list
       }
-      if (mediaTypeFilter !== "all") {
-        params.set("media_type", mediaTypeFilter);
-      }
-      if (dateFrom) {
-        params.set("date_from", dateFrom);
-      }
-      if (dateTo) {
-        params.set("date_to", dateTo);
-      }
-      if (locationOnly) {
-        params.set("location_only", "true");
-      }
-      const endpoint = params.toString() ? `/media?${params.toString()}` : "/media";
-      const data = await apiRequest<{ media: MediaItem[]; total: number }>(endpoint);
-      setMediaItems(data.media || []);
     } catch (err) {
       console.error("Failed to fetch media:", err);
     } finally {
@@ -838,11 +919,16 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
   };
 
   const handleAddLibrary = async () => {
-    // For now, prompt for folder path
-    const folderPath = prompt("Enter folder path:");
-    if (!folderPath) return;
-
     try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const folderPath = await open({
+        directory: true,
+        multiple: false,
+        title: "Select Media Library Folder",
+      });
+
+      if (!folderPath) return; // User cancelled
+
       const { apiRequest } = await import("../lib/apiClient");
       await apiRequest<Library>("/libraries", {
         method: "POST",
@@ -1099,19 +1185,89 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
 
   const formatPhotoDate = (creationTime?: string | null, fallbackMs?: number | null) => {
     if (creationTime) {
-      const normalized = creationTime.replace(/^(\d{4}):(\d{2}):(\d{2})/, "$1-$2-$3");
-      const parsed = new Date(normalized);
-      if (!Number.isNaN(parsed.getTime())) {
-        return parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+      try {
+        // Handle EXIF format "YYYY:MM:DD HH:MM:SS" or ISO format "YYYY-MM-DDTHH:MM:SS"
+        const normalized = creationTime.replace(/^(\d{4}):(\d{2}):(\d{2})/, "$1-$2-$3");
+        const parsed = new Date(normalized);
+        if (!Number.isNaN(parsed.getTime()) && parsed.getFullYear() > 1900) {
+          return parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+        }
+      } catch (e) {
+        console.warn("Failed to parse creation_time:", creationTime, e);
       }
     }
     if (fallbackMs) {
-      const parsed = new Date(fallbackMs);
-      if (!Number.isNaN(parsed.getTime())) {
-        return parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+      try {
+        const parsed = new Date(fallbackMs);
+        if (!Number.isNaN(parsed.getTime()) && parsed.getFullYear() > 1900) {
+          return parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+        }
+      } catch (e) {
+        console.warn("Failed to parse fallbackMs:", fallbackMs, e);
       }
     }
     return "Unknown date";
+  };
+
+  const formatPhotoDateTime = (creationTime?: string | null, fallbackMs?: number | null) => {
+    if (creationTime) {
+      try {
+        // Handle EXIF format "YYYY:MM:DD HH:MM:SS" or ISO format "YYYY-MM-DDTHH:MM:SS"
+        const normalized = creationTime.replace(/^(\d{4}):(\d{2}):(\d{2})/, "$1-$2-$3");
+        const parsed = new Date(normalized);
+        if (!Number.isNaN(parsed.getTime()) && parsed.getFullYear() > 1900) {
+          return parsed.toLocaleString(undefined, { 
+            year: "numeric", 
+            month: "long", 
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            hour12: true
+          });
+        }
+      } catch (e) {
+        console.warn("Failed to parse creation_time:", creationTime, e);
+      }
+    }
+    if (fallbackMs) {
+      try {
+        const parsed = new Date(fallbackMs);
+        if (!Number.isNaN(parsed.getTime()) && parsed.getFullYear() > 1900) {
+          return parsed.toLocaleString(undefined, { 
+            year: "numeric", 
+            month: "long", 
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            hour12: true
+          });
+        }
+      } catch (e) {
+        console.warn("Failed to parse fallbackMs:", fallbackMs, e);
+      }
+    }
+    return "Unknown date";
+  };
+
+  const formatYearMonth = (yearMonth: string) => {
+    try {
+      // Convert "2024-01" to "January 2024"
+      const [year, month] = yearMonth.split("-");
+      if (!year || !month) return yearMonth;
+      const yearNum = parseInt(year);
+      const monthNum = parseInt(month);
+      if (isNaN(yearNum) || isNaN(monthNum) || monthNum < 1 || monthNum > 12) {
+        return yearMonth;
+      }
+      const date = new Date(yearNum, monthNum - 1, 1);
+      if (!Number.isNaN(date.getTime())) {
+        return date.toLocaleDateString(undefined, { year: "numeric", month: "long" });
+      }
+      return yearMonth;
+    } catch (e) {
+      console.warn("Failed to format year-month:", yearMonth, e);
+      return yearMonth;
+    }
   };
 
   const formatFileSize = (bytes?: number | null) => {
@@ -1141,16 +1297,25 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
 
   const getMediaTimestamp = (item: MediaItem) => {
     if (item.creation_time) {
-      const normalized = item.creation_time.replace(/^(\d{4}):(\d{2}):(\d{2})/, "$1-$2-$3");
-      const parsed = new Date(normalized);
-      if (!Number.isNaN(parsed.getTime())) {
-        return parsed.getTime();
+      try {
+        const normalized = item.creation_time.replace(/^(\d{4}):(\d{2}):(\d{2})/, "$1-$2-$3");
+        const parsed = new Date(normalized);
+        const timestamp = parsed.getTime();
+        if (!Number.isNaN(timestamp) && timestamp > 0 && parsed.getFullYear() > 1900) {
+          return timestamp;
+        }
+      } catch (e) {
+        // Fall through to mtime_ms
       }
     }
-    if (item.mtime_ms) {
+    if (item.mtime_ms && item.mtime_ms > 0) {
       return item.mtime_ms;
     }
-    return item.created_at_ms;
+    if (item.created_at_ms && item.created_at_ms > 0) {
+      return item.created_at_ms;
+    }
+    // Fallback to current time if all else fails
+    return Date.now();
   };
 
   const sortedMediaItems = useMemo(() => {
@@ -1167,12 +1332,18 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
     if (!sortedMediaItems.length) return "Moments are being organized";
     const timestamps = sortedMediaItems
       .map((item) => getMediaTimestamp(item))
-      .filter(Boolean)
+      .filter((t) => t && t > 0 && !Number.isNaN(t))
       .slice(0, 8)
       .sort((a, b) => a - b);
     if (!timestamps.length) return "Moments are being organized";
+
     const earliest = new Date(timestamps[0]);
     const latest = new Date(timestamps[timestamps.length - 1]);
+
+    // Validate dates
+    if (Number.isNaN(earliest.getTime()) || Number.isNaN(latest.getTime())) {
+      return "Moments are being organized";
+    }
     const monthFormatter = new Intl.DateTimeFormat("en-US", { month: "short" });
     const dayFormatter = new Intl.DateTimeFormat("en-US", { day: "numeric" });
     const yearFormatter = new Intl.DateTimeFormat("en-US", { year: "numeric" });
@@ -1247,36 +1418,110 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
     }
   };
 
-  const handleAddTag = (mediaId: string) => {
+  const handlePlayLivePhoto = async (mediaId: string) => {
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      const liveComponent = await apiRequest<MediaItem | null>(`/media/${mediaId}/live-photo`);
+
+      if (liveComponent) {
+        setLivePhotoComponent(liveComponent);
+        // Open the video in the player
+        openPlayer(liveComponent.media_id, 0);
+      }
+    } catch (err) {
+      console.error("Failed to fetch LIVE photo component:", err);
+    }
+  };
+
+  const handleAddTag = async (mediaId: string) => {
     const tag = prompt("Add a tag:");
     if (!tag) return;
     const normalized = tag.trim();
     if (!normalized) return;
-    setMediaTags((prev) => {
-      const next = { ...prev };
-      const existing = new Set(next[mediaId] || []);
-      existing.add(normalized);
-      next[mediaId] = Array.from(existing);
-      return next;
-    });
+
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      await apiRequest("/favorites/tags", {
+        method: "POST",
+        body: JSON.stringify({ media_id: mediaId, tag: normalized }),
+      });
+      
+      // Update local state
+      setMediaTags((prev) => {
+        const next = { ...prev };
+        const existing = new Set(next[mediaId] || []);
+        existing.add(normalized);
+        next[mediaId] = Array.from(existing);
+        return next;
+      });
+    } catch (error) {
+      console.error("Failed to add tag:", error);
+    }
   };
 
-  const toggleFavorite = (mediaId: string) => {
-    setFavoriteIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(mediaId)) {
-        next.delete(mediaId);
-      } else {
-        next.add(mediaId);
+  const handleExportCaptions = async (videoId: string, format: "srt" | "vtt" = "srt") => {
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      const content = await apiRequest<string>(`/search/export/captions/${videoId}?format=${format}`);
+      
+      if (!content || content.trim() === "") {
+        alert("No captions available for this video. The video may not be transcribed yet.");
+        return;
       }
-      return next;
-    });
+      
+      const blob = new Blob([content], { type: format === "srt" ? "text/plain" : "text/vtt" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const video = videos.find((v) => v.video_id === videoId);
+      const filename = video ? video.filename.replace(/\.[^/.]+$/, "") : videoId;
+      a.download = `${filename}.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Failed to export captions:", error);
+      alert("Failed to export captions. The video may not be transcribed yet.");
+    }
   };
 
-  const handleShareAction = () => {
-    if (!selectedMediaId) return;
-    console.info("Share action triggered for", selectedMediaId);
+  const toggleFavorite = async (mediaId: string) => {
+    console.log("Toggling favorite for:", mediaId);
+    const isFavorite = favoriteIds.has(mediaId);
+
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      
+      if (isFavorite) {
+        await apiRequest(`/favorites/media/${mediaId}`, {
+          method: "DELETE",
+        });
+        setFavoriteIds((prev) => {
+          const next = new Set(prev);
+          next.delete(mediaId);
+          console.log("Removed from favorites:", mediaId);
+          return next;
+        });
+      } else {
+        await apiRequest("/favorites/media", {
+          method: "POST",
+          body: JSON.stringify({ media_id: mediaId }),
+        });
+        setFavoriteIds((prev) => {
+          const next = new Set(prev);
+          next.add(mediaId);
+          console.log("Added to favorites:", mediaId);
+          return next;
+        });
+      }
+      console.log("Total favorites now:", favoriteIds.size + (isFavorite ? -1 : 1));
+    } catch (error) {
+      console.error("Failed to toggle favorite:", error);
+    }
   };
+
+  // handleShareAction removed - feature not implemented
 
   const handleFavoriteAction = () => {
     if (!selectedMediaId) return;
@@ -1341,6 +1586,38 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
       ? `Indexed ${totalIndexed}/${totalItems}`
       : "Ready to scan";
 
+  const handleDeepUpgrade = async () => {
+    if (deepUpgrading) return;
+    setDeepUpgrading(true);
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      const result = await apiRequest<{ upgraded: number; skipped: number }>("/jobs/upgrade-to-deep", {
+        method: "POST",
+      });
+      console.log(`Deep upgrade started: ${result.upgraded} videos queued`);
+    } catch (err) {
+      console.error("Failed to start deep upgrade:", err);
+    } finally {
+      setDeepUpgrading(false);
+    }
+  };
+
+  const handleRegenerateThumbnails = async () => {
+    if (regeneratingThumbnails) return;
+    setRegeneratingThumbnails(true);
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      await apiRequest("/jobs/regenerate-grid-thumbnails", {
+        method: "POST",
+      });
+      console.log("Grid thumbnail regeneration started");
+    } catch (err) {
+      console.error("Failed to start thumbnail regeneration:", err);
+    } finally {
+      setRegeneratingThumbnails(false);
+    }
+  };
+
   const getMatchLabel = (result: SearchResult) => {
     if (result.match_type === "both") return "Matched in transcript & visual";
     if (result.match_type === "transcript") return "Matched in transcript";
@@ -1369,15 +1646,21 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
   }
 
   const resolveAssetUrl = useCallback(
-    (path?: string | null) => {
+    (path?: string | null, size: "grid" | "full" = "grid") => {
       if (!path) return "";
       if (isTauri) {
+        // For Tauri, try to use _grid variant for grid size
+        if (size === "grid") {
+          const gridPath = path.replace(/\.jpg$/, "_grid.jpg");
+          // Try grid first, fall back to original
+          return convertFileSrc(gridPath);
+        }
         return convertFileSrc(path);
       }
       if (!apiBaseUrl) {
         return "";
       }
-      return `${apiBaseUrl}/assets/thumbnail?path=${encodeURIComponent(path)}`;
+      return `${apiBaseUrl}/assets/thumbnail?path=${encodeURIComponent(path)}&size=${size}`;
     },
     [apiBaseUrl]
   );
@@ -1482,6 +1765,65 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
     setPlayerLoading(false);
   };
 
+  // Get current media index for navigation
+  const currentMediaIndex = useMemo(() => {
+    if (activePhoto) {
+      return sortedMediaItems.findIndex(item => item.media_id === activePhoto.media_id);
+    }
+    if (activeVideo) {
+      return sortedMediaItems.findIndex(item => item.media_id === activeVideo.video_id);
+    }
+    return -1;
+  }, [activePhoto, activeVideo, sortedMediaItems]);
+
+  // Navigate to previous media
+  const navigatePrev = useCallback(() => {
+    if (currentMediaIndex <= 0) return;
+    const prevItem = sortedMediaItems[currentMediaIndex - 1];
+    if (prevItem.media_type === "video") {
+      setActivePhoto(null);
+      openPlayer(prevItem.media_id, 0);
+    } else {
+      closePlayer();
+      setActivePhoto(prevItem);
+    }
+  }, [currentMediaIndex, sortedMediaItems, openPlayer]);
+
+  // Navigate to next media
+  const navigateNext = useCallback(() => {
+    if (currentMediaIndex < 0 || currentMediaIndex >= sortedMediaItems.length - 1) return;
+    const nextItem = sortedMediaItems[currentMediaIndex + 1];
+    if (nextItem.media_type === "video") {
+      setActivePhoto(null);
+      openPlayer(nextItem.media_id, 0);
+    } else {
+      closePlayer();
+      setActivePhoto(nextItem);
+    }
+  }, [currentMediaIndex, sortedMediaItems, openPlayer]);
+
+  // Keyboard navigation for overlay
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!activePhoto && !activeVideo) return;
+
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        navigatePrev();
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        navigateNext();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        if (activePhoto) setActivePhoto(null);
+        if (activeVideo) closePlayer();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activePhoto, activeVideo, navigatePrev, navigateNext]);
+
   useEffect(() => {
     if (!activeVideo || !videoRef.current) return;
     if (videoRef.current.readyState >= 1) {
@@ -1511,6 +1853,74 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
             />
           </div>
         )}
+
+        {/* Smart Folders Section */}
+        <div className="smart-folders-section">
+          <div className="sidebar-section-title">Smart Folders</div>
+          <div className="smart-folders-list">
+            {/* People Smart Folder */}
+            {faceRecognitionEnabled && persons.length > 0 && (
+              <button
+                className="smart-folder-item"
+                onClick={() => {
+                  setSearchMode("all");
+                  setShowFilters(true);
+                  setShowPersonPicker(true);
+                  setSelectedPersons([]);
+                }}
+                type="button"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="3" />
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                  <path d="M16 3.13a3 3 0 0 1 0 5.74" />
+                </svg>
+                <span className="smart-folder-label">People</span>
+                <span className="smart-folder-count">{persons.length}</span>
+              </button>
+            )}
+
+            {/* Transcripts Smart Folder */}
+            <button
+              className="smart-folder-item"
+              onClick={() => {
+                setSearchMode("transcript");
+                setShowFilters(true);
+                searchInputRef.current?.focus();
+              }}
+              type="button"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+              </svg>
+              <span className="smart-folder-label">Transcripts</span>
+              <span className="smart-folder-count">AI</span>
+            </button>
+
+            {/* Objects/Visual Smart Folder */}
+            <button
+              className="smart-folder-item"
+              onClick={() => {
+                setSearchMode("visual");
+                setShowFilters(true);
+                searchInputRef.current?.focus();
+              }}
+              type="button"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+                <line x1="12" y1="22.08" x2="12" y2="12" />
+              </svg>
+              <span className="smart-folder-label">Objects</span>
+              <span className="smart-folder-count">AI</span>
+            </button>
+          </div>
+        </div>
 
         <div className="sidebar-content">
           <div className="library-list">
@@ -1619,7 +2029,7 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                 <input
                   type="text"
                   className="search-input"
-                  placeholder="Search..."
+                  placeholder="Search... (Ctrl+K)"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   ref={searchInputRef}
@@ -1649,6 +2059,32 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                   </span>
                 )}
               </button>
+
+              {/* Zoom slider */}
+              <div className="zoom-control">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="3" y="3" width="7" height="7" />
+                  <rect x="14" y="3" width="7" height="7" />
+                  <rect x="14" y="14" width="7" height="7" />
+                  <rect x="3" y="14" width="7" height="7" />
+                </svg>
+                <input
+                  type="range"
+                  min="0"
+                  max="2"
+                  step="1"
+                  value={thumbnailSize === "small" ? 0 : thumbnailSize === "medium" ? 1 : 2}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value);
+                    setThumbnailSize(val === 0 ? "small" : val === 1 ? "medium" : "large");
+                  }}
+                  className="zoom-slider"
+                  title="Adjust thumbnail size"
+                />
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="2" y="2" width="20" height="20" />
+                </svg>
+              </div>
 
               {/* Status indicator */}
               <button
@@ -2121,8 +2557,197 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
               <div className="spinner spinner-large" />
               <p>Loading your library...</p>
             </div>
+          ) : groupedMedia && Object.keys(groupedMedia).length > 0 ? (
+            // Render grouped media by year-month
+            <div className="grouped-media-container">
+              {Object.entries(groupedMedia).map(([yearMonth, items]) => (
+                <div key={yearMonth} className="media-group">
+                  <div className="date-header">{formatYearMonth(yearMonth)}</div>
+                  <div className={`video-grid view-${viewMode} zoom-${thumbnailSize}`}>
+                    {items.map((item) => {
+                      const isVideo = item.media_type === "video";
+                      const video = isVideo ? videos.find((v) => v.video_id === item.media_id) : null;
+                      const status = video?.status ?? item.status;
+                      const progress = video?.progress ?? item.progress;
+                      const duration = video?.duration_ms ?? item.duration_ms ?? undefined;
+                      const isFavorite = favoriteIds.has(item.media_id);
+                      const isMenuOpen = menuOpenId === item.media_id;
+                      const toggleMenu = (event: MouseEvent<HTMLButtonElement>) => {
+                        event.stopPropagation();
+                        setMenuOpenId(isMenuOpen ? null : item.media_id);
+                      };
+                      const handleMenuAction =
+                        (action: () => void) => (event: MouseEvent<HTMLButtonElement>) => {
+                          event.stopPropagation();
+                          action();
+                          setMenuOpenId(null);
+                        };
+
+                      const statusVariant = isVideo
+                        ? status === "DONE"
+                          ? "complete"
+                          : status === "FAILED"
+                            ? "failed"
+                            : status === "QUEUED"
+                              ? "queued"
+                              : "processing"
+                        : "photo";
+                      const statusLabel = isVideo
+                        ? status === "DONE"
+                          ? "Indexed"
+                          : status === "FAILED"
+                            ? "Failed"
+                            : status === "QUEUED"
+                              ? "Queued"
+                              : "Indexing"
+                        : "Photo";
+                      const statusIcon = isVideo
+                        ? status === "DONE"
+                          ? <CheckIcon />
+                          : status === "FAILED"
+                            ? <AlertCircleIcon />
+                            : <LoaderIcon />
+                        : <ImageIcon />;
+
+                      const overlayContent = (
+                        <div className="media-overlay">
+                          {status === "FAILED" && <div className={`media-status-pill ${statusVariant}`} />}
+                          {status !== "DONE" && status !== "FAILED" && status !== "QUEUED" && (
+                            <div className="media-indexing-overlay">
+                              <div className="spinner" />
+                            </div>
+                          )}
+                          {status === "QUEUED" && <div className={`media-status-pill ${statusVariant}`} />}
+                          {isVideo && duration && (
+                            <span className="video-duration">{formatDuration(duration)}</span>
+                          )}
+                          <div className="media-action">
+                            <button
+                              className="media-action-trigger"
+                              type="button"
+                              aria-haspopup="menu"
+                              aria-expanded={isMenuOpen}
+                              onClick={toggleMenu}
+                            >
+                              <MoreIcon />
+                            </button>
+                            {isMenuOpen && (
+                              <div className="media-action-menu">
+                                <button
+                                  type="button"
+                                  onClick={handleMenuAction(() => handleOpenItem(item.media_id, false))}
+                                >
+                                  Open file
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleMenuAction(() => handleOpenItem(item.media_id, true))}
+                                >
+                                  Open folder
+                                </button>
+                          <button
+                            type="button"
+                            onClick={handleMenuAction(() => handleCopyItemPath(item.media_id))}
+                          >
+                            Copy file path
+                          </button>
+                          {isVideo && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={handleMenuAction(() => handleExportCaptions(item.media_id, "srt"))}
+                              >
+                                Export captions (SRT)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleMenuAction(() => handleExportCaptions(item.media_id, "vtt"))}
+                              >
+                                Export captions (VTT)
+                              </button>
+                            </>
+                          )}
+                                {isVideo && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={handleMenuAction(() => handleExportCaptions(item.media_id, "srt"))}
+                                    >
+                                      Export captions (SRT)
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={handleMenuAction(() => handleExportCaptions(item.media_id, "vtt"))}
+                                    >
+                                      Export captions (VTT)
+                                    </button>
+                                  </>
+                                )}
+                                {selectedLibrary && selectedLibrary !== ALL_LIBRARIES_ID && (
+                                  <button
+                                    type="button"
+                                    onClick={handleMenuAction(() => handlePurgeMedia(item.media_id))}
+                                  >
+                                    Purge
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+
+                      const handleCardClick = () => {
+                        if (isVideo) {
+                          openPlayer(item.media_id, 0);
+                        } else {
+                          setActivePhoto(item);
+                        }
+                      };
+
+                      return (
+                        <div
+                          key={item.media_id}
+                          className={`video-card media-card ${isVideo ? "is-video" : "is-photo"} ${selectedMediaId === item.media_id ? "selected" : ""}`}
+                          onClick={handleCardClick}
+                        >
+                          {isVideo ? (
+                            <HoverPreview
+                              videoId={item.media_id}
+                              className="video-thumbnail"
+                              baseThumbnail={item.thumbnail_path ?? undefined}
+                              resolveAssetUrl={resolveAssetUrl}
+                              limit={15}
+                              overlay={overlayContent}
+                              placeholder={
+                                <div className="video-thumbnail-placeholder">
+                                  <FilmIcon />
+                                </div>
+                              }
+                            />
+                          ) : (
+                            <div className="video-thumbnail photo-thumbnail">
+                              {item.thumbnail_path ? (
+                                <img src={resolveAssetUrl(item.thumbnail_path, "grid")} alt="" loading="lazy" />
+                              ) : item.path ? (
+                                <img src={resolveMediaUrl(item.path)} alt="" loading="lazy" />
+                              ) : (
+                                <div className="video-thumbnail-placeholder">
+                                  <ImageIcon />
+                                </div>
+                              )}
+                              {overlayContent}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
           ) : mediaItems.length > 0 ? (
-            <div className={`video-grid view-${viewMode}`}>
+            <div className={`video-grid view-${viewMode} zoom-${thumbnailSize}`}>
               {sortedMediaItems.map((item) => {
                 const isVideo = item.media_type === "video";
                 const video = isVideo ? videos.find((v) => v.video_id === item.media_id) : null;
@@ -2259,7 +2884,9 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                       />
                     ) : (
                       <div className="video-thumbnail photo-thumbnail">
-                        {item.path ? (
+                        {item.thumbnail_path ? (
+                          <img src={resolveAssetUrl(item.thumbnail_path, "grid")} alt="" loading="lazy" />
+                        ) : item.path ? (
                           <img src={resolveMediaUrl(item.path)} alt="" loading="lazy" />
                         ) : (
                           <div className="video-thumbnail-placeholder">
@@ -2302,19 +2929,97 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
 
         {(activeVideo || playerLoading || playerError) && (
           <div className="player-overlay" onClick={closePlayer}>
-            <div className="player-panel" onClick={(e) => e.stopPropagation()}>
+            {/* Navigation arrows */}
+            <button
+              className="overlay-nav overlay-nav-prev"
+              onClick={(e) => { e.stopPropagation(); navigatePrev(); }}
+              disabled={currentMediaIndex <= 0}
+              title="Previous (←)"
+            >
+              <ChevronLeftIcon />
+            </button>
+            <button
+              className="overlay-nav overlay-nav-next"
+              onClick={(e) => { e.stopPropagation(); navigateNext(); }}
+              disabled={currentMediaIndex >= sortedMediaItems.length - 1}
+              title="Next (→)"
+            >
+              <ChevronRightIcon />
+            </button>
+
+            <div className={`player-panel ${showVideoInfo ? "with-info" : ""}`} onClick={(e) => e.stopPropagation()}>
               <div className="player-header">
                 <div className="player-title">
                   {activeVideo?.filename ?? "Loading..."}
                 </div>
-                <button className="btn-icon" onClick={closePlayer} title="Close player">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                </button>
+                <div className="player-header-actions">
+                  {activeVideo && (
+                    <>
+                      <button
+                        className="btn-icon"
+                        onClick={async () => {
+                          try {
+                            const { Command } = await import("@tauri-apps/plugin-shell");
+                            const filePath = activeVideo.path;
+                            await Command.create("explorer", ["/select,", filePath.replace(/\//g, "\\")]).execute();
+                          } catch (err) {
+                            console.error("Failed to open folder:", err);
+                          }
+                        }}
+                        title="Open containing folder"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                        </svg>
+                      </button>
+                      <button
+                        className="btn-icon"
+                        onClick={async () => {
+                          try {
+                            const { Command } = await import("@tauri-apps/plugin-shell");
+                            await Command.create("cmd", ["/c", "start", "", activeVideo.path]).execute();
+                          } catch (err) {
+                            console.error("Failed to open file:", err);
+                          }
+                        }}
+                        title="Open in default app"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                          <polyline points="15 3 21 3 21 9" />
+                          <line x1="10" y1="14" x2="21" y2="3" />
+                        </svg>
+                      </button>
+                    </>
+                  )}
+                  <button
+                    className={`btn-icon ${activeVideo && favoriteIds.has(activeVideo.video_id) ? "active" : ""}`}
+                    onClick={() => activeVideo && toggleFavorite(activeVideo.video_id)}
+                    title={activeVideo && favoriteIds.has(activeVideo.video_id) ? "Remove from favorites" : "Add to favorites"}
+                  >
+                    <StarIcon filled={!!activeVideo && favoriteIds.has(activeVideo.video_id)} />
+                  </button>
+                  <button
+                    className={`btn-icon ${showVideoInfo ? "active" : ""}`}
+                    onClick={() => setShowVideoInfo(!showVideoInfo)}
+                    title="Show information"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="16" x2="12" y2="12" />
+                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                    </svg>
+                  </button>
+                  <button className="btn-icon" onClick={closePlayer} title="Close (Esc)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                </div>
               </div>
-              <div className="player-body">
+              <div className="player-content">
+                <div className="player-body">
                 {playerLoading ? (
                   <div className="player-loading">
                     <div className="spinner spinner-large" />
@@ -2340,12 +3045,96 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                   />
                 ) : null}
               </div>
-              <div className="player-footer">
-                <div className="player-meta">
-                  Start {activeVideo ? formatTimestamp(activeVideo.timestamp_ms) : "--:--"}
+              {showVideoInfo && activeVideo && (
+                <div className="video-info-sidebar">
+                  <div className="photo-info-section">
+                    <div className="photo-info-title">File Info</div>
+                    <div className="photo-info-row">
+                      <span className="photo-info-label">Name:</span>
+                      <span className="photo-info-value">{activeVideo.filename}</span>
+                    </div>
+                    <div className="photo-info-row">
+                      <span className="photo-info-label">Path:</span>
+                      <span className="photo-info-value" style={{ fontSize: 11, wordBreak: "break-all" }}>
+                        {activeVideo.path}
+                      </span>
+                    </div>
+                    {activeVideo.size_bytes && (
+                      <div className="photo-info-row">
+                        <span className="photo-info-label">Size:</span>
+                        <span className="photo-info-value">
+                          {(activeVideo.size_bytes / (1024 * 1024)).toFixed(2)} MB
+                        </span>
+                      </div>
+                    )}
+                    <div className="photo-info-row">
+                      <span className="photo-info-label">Duration:</span>
+                      <span className="photo-info-value">
+                        {activeVideo.duration_ms ? formatDuration(activeVideo.duration_ms) : "Unknown"}
+                      </span>
+                    </div>
+                    <div className="photo-info-row">
+                      <span className="photo-info-label">Created:</span>
+                      <span className="photo-info-value">
+                        {formatPhotoDateTime(activeVideo.creation_time, activeVideo.mtime_ms)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Detected objects */}
+                  {activeVideo.detected_objects && activeVideo.detected_objects.length > 0 && (
+                    <div className="photo-info-section">
+                      <div className="photo-info-title">Detected Objects</div>
+                      <div className="photo-info-chips">
+                        {activeVideo.detected_objects.map((obj: string, idx: number) => (
+                          <span key={idx} className="photo-info-chip">{obj}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Transcript */}
+                  <div className="photo-info-section">
+                    <div className="photo-info-title">Transcript</div>
+                    {activeVideo.transcript && activeVideo.transcript.trim() ? (
+                      <div className="video-transcript">
+                        {activeVideo.transcript}
+                      </div>
+                    ) : (
+                      <div className="photo-info-row" style={{ fontStyle: "italic", color: "var(--text-tertiary)" }}>
+                        No transcript available. Video may not have been fully processed yet.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Quick actions */}
+                  <div className="photo-info-section">
+                    <div className="photo-info-title">Quick Actions</div>
+                    <button
+                      className="photo-info-action-btn"
+                      onClick={() => {
+                        setSearchMode("visual");
+                        setSearchQuery(activeVideo.filename);
+                        setShowFilters(true);
+                        closePlayer();
+                      }}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <circle cx="11" cy="11" r="8" />
+                        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                      </svg>
+                      Find Similar Videos
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="player-footer">
+                <div className="player-nav-info">
+                  {currentMediaIndex + 1} of {sortedMediaItems.length}
                 </div>
                 <div className="player-meta">
-                  Duration {activeVideo?.duration_ms ? formatDuration(activeVideo.duration_ms) : "--:--"}
+                  {activeVideo?.duration_ms ? formatDuration(activeVideo.duration_ms) : "--:--"}
                 </div>
               </div>
             </div>
@@ -2354,33 +3143,194 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
 
         {activePhoto && (
           <div className="photo-overlay" onClick={() => setActivePhoto(null)}>
-            <div className="photo-panel" onClick={(e) => e.stopPropagation()}>
+            {/* Navigation arrows */}
+            <button
+              className="overlay-nav overlay-nav-prev"
+              onClick={(e) => { e.stopPropagation(); navigatePrev(); }}
+              disabled={currentMediaIndex <= 0}
+              title="Previous (←)"
+            >
+              <ChevronLeftIcon />
+            </button>
+            <button
+              className="overlay-nav overlay-nav-next"
+              onClick={(e) => { e.stopPropagation(); navigateNext(); }}
+              disabled={currentMediaIndex >= sortedMediaItems.length - 1}
+              title="Next (→)"
+            >
+              <ChevronRightIcon />
+            </button>
+
+            <div className={`photo-panel ${showPhotoInfo ? "with-info" : ""}`} onClick={(e) => e.stopPropagation()}>
               <div className="photo-header">
                 <div className="photo-title">{activePhoto.filename}</div>
-                <button className="btn-icon" onClick={() => setActivePhoto(null)} title="Close photo">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                </button>
+                <div className="photo-header-actions">
+                  <button
+                    className="btn-icon"
+                    onClick={async () => {
+                      try {
+                        const { Command } = await import("@tauri-apps/plugin-shell");
+                        const filePath = activePhoto.path;
+                        const folderPath = filePath.substring(0, filePath.lastIndexOf("/"));
+                        await Command.create("explorer", ["/select,", filePath.replace(/\//g, "\\")]).execute();
+                      } catch (err) {
+                        console.error("Failed to open folder:", err);
+                      }
+                    }}
+                    title="Open containing folder"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                    </svg>
+                  </button>
+                  <button
+                    className="btn-icon"
+                    onClick={async () => {
+                      try {
+                        const { Command } = await import("@tauri-apps/plugin-shell");
+                        await Command.create("cmd", ["/c", "start", "", activePhoto.path]).execute();
+                      } catch (err) {
+                        console.error("Failed to open file:", err);
+                      }
+                    }}
+                    title="Open in default app"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                      <polyline points="15 3 21 3 21 9" />
+                      <line x1="10" y1="14" x2="21" y2="3" />
+                    </svg>
+                  </button>
+                  <button
+                    className={`btn-icon ${favoriteIds.has(activePhoto.media_id) ? "active" : ""}`}
+                    onClick={() => toggleFavorite(activePhoto.media_id)}
+                    title={favoriteIds.has(activePhoto.media_id) ? "Remove from favorites" : "Add to favorites"}
+                  >
+                    <StarIcon filled={favoriteIds.has(activePhoto.media_id)} />
+                  </button>
+                  <button
+                    className={`btn-icon ${showPhotoInfo ? "active" : ""}`}
+                    onClick={() => setShowPhotoInfo(!showPhotoInfo)}
+                    title="Show information"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="16" x2="12" y2="12" />
+                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                    </svg>
+                  </button>
+                  <button className="btn-icon" onClick={() => setActivePhoto(null)} title="Close (Esc)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                </div>
               </div>
-              <div className="photo-body">
-                <img src={resolveMediaUrl(activePhoto.path)} alt={activePhoto.filename} />
+              <div className="photo-content">
+                <div className="photo-body">
+                  <img src={resolveMediaUrl(activePhoto.path)} alt={activePhoto.filename} />
+                </div>
+                {showPhotoInfo && (
+                  <div className="photo-info-sidebar">
+                    <div className="photo-info-section">
+                      <div className="photo-info-title">File Info</div>
+                      <div className="photo-info-row">
+                        <span className="photo-info-label">Name:</span>
+                        <span className="photo-info-value">{activePhoto.filename}</span>
+                      </div>
+                      <div className="photo-info-row">
+                        <span className="photo-info-label">Path:</span>
+                        <span className="photo-info-value" style={{ fontSize: 11, wordBreak: "break-all" }}>
+                          {activePhoto.path}
+                        </span>
+                      </div>
+                      {activePhoto.size_bytes && (
+                        <div className="photo-info-row">
+                          <span className="photo-info-label">Size:</span>
+                          <span className="photo-info-value">
+                            {(activePhoto.size_bytes / (1024 * 1024)).toFixed(2)} MB
+                          </span>
+                        </div>
+                      )}
+                      <div className="photo-info-row">
+                        <span className="photo-info-label">Dimensions:</span>
+                        <span className="photo-info-value">
+                          {activePhoto.width && activePhoto.height
+                            ? `${activePhoto.width} × ${activePhoto.height}`
+                            : "Unknown"}
+                        </span>
+                      </div>
+                      <div className="photo-info-row">
+                        <span className="photo-info-label">Created:</span>
+                        <span className="photo-info-value">
+                          {formatPhotoDateTime(activePhoto.creation_time, activePhoto.mtime_ms)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* AI-detected content */}
+                    {activePhoto.detected_objects && activePhoto.detected_objects.length > 0 && (
+                      <div className="photo-info-section">
+                        <div className="photo-info-title">Detected Objects</div>
+                        <div className="photo-info-chips">
+                          {activePhoto.detected_objects.map((obj: string, idx: number) => (
+                            <span key={idx} className="photo-info-chip">{obj}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Quick actions */}
+                    <div className="photo-info-section">
+                      <div className="photo-info-title">Quick Actions</div>
+                      <button
+                        className="photo-info-action-btn"
+                        onClick={() => {
+                          setSearchMode("visual");
+                          setSearchQuery(activePhoto.filename);
+                          setShowFilters(true);
+                          setActivePhoto(null);
+                        }}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <circle cx="11" cy="11" r="8" />
+                          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                        </svg>
+                        Find Similar Images
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="photo-footer">
+                <div className="photo-nav-info">
+                  {currentMediaIndex + 1} of {sortedMediaItems.length}
+                </div>
                 <div className="photo-meta">
                   {formatPhotoDate(activePhoto.creation_time, activePhoto.mtime_ms)}
                 </div>
                 <div className="photo-meta">
                   {activePhoto.width && activePhoto.height
                     ? `${activePhoto.width}×${activePhoto.height}`
-                    : "Dimensions unknown"}
+                    : ""}
                 </div>
-                <div className="photo-meta">
-                  {activePhoto.camera_make || activePhoto.camera_model
-                    ? [activePhoto.camera_make, activePhoto.camera_model].filter(Boolean).join(" ")
-                    : "Camera unknown"}
-                </div>
+                {activePhoto.live_photo_pair_id && (
+                  <button
+                    className="btn btn-live-photo"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handlePlayLivePhoto(activePhoto.media_id);
+                    }}
+                    title="Play LIVE Photo"
+                  >
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
+                      <circle cx="12" cy="12" r="10" opacity="0.3" />
+                      <path d="M10 8l6 4-6 4V8z" />
+                    </svg>
+                    LIVE
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -2421,6 +3371,65 @@ export function MainView({ scanProgress, jobProgress, faceRecognitionEnabled = f
                     <div className="status-stat-label">Failed</div>
                   </div>
                 </div>
+
+                {/* Deep Upgrade Button */}
+                {indexedCount > 0 && processingCount === 0 && (
+                  <div className="status-section">
+                    <button
+                      className="btn btn-secondary status-upgrade-btn"
+                      onClick={handleDeepUpgrade}
+                      disabled={deepUpgrading}
+                    >
+                      {deepUpgrading ? (
+                        <>
+                          <div className="spinner" style={{ width: 14, height: 14 }} />
+                          Upgrading...
+                        </>
+                      ) : (
+                        <>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}>
+                            <path d="M12 19V5M5 12l7-7 7 7" />
+                          </svg>
+                          Upgrade to Deep Indexing
+                        </>
+                      )}
+                    </button>
+                    <p className="status-upgrade-hint">
+                      Run object detection, face recognition, and transcription on already-indexed items.
+                    </p>
+                  </div>
+                )}
+
+                {/* Regenerate Grid Thumbnails Button */}
+                {indexedCount > 0 && processingCount === 0 && (
+                  <div className="status-section">
+                    <button
+                      className="btn btn-secondary status-upgrade-btn"
+                      onClick={handleRegenerateThumbnails}
+                      disabled={regeneratingThumbnails}
+                    >
+                      {regeneratingThumbnails ? (
+                        <>
+                          <div className="spinner" style={{ width: 14, height: 14 }} />
+                          Regenerating...
+                        </>
+                      ) : (
+                        <>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}>
+                            <rect x="3" y="3" width="7" height="7" />
+                            <rect x="14" y="3" width="7" height="7" />
+                            <rect x="14" y="14" width="7" height="7" />
+                            <rect x="3" y="14" width="7" height="7" />
+                          </svg>
+                          Optimize Thumbnails
+                        </>
+                      )}
+                    </button>
+                    <p className="status-upgrade-hint">
+                      Generate fast-loading grid thumbnails for existing indexed items.
+                    </p>
+                  </div>
+                )}
 
                 {/* Active Jobs */}
                 <div className="status-section">

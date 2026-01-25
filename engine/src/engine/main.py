@@ -14,11 +14,12 @@ import uvicorn
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import health, models, libraries, videos, media, search, jobs, settings, logs, stats, assets, faces, backup, network, maintenance
+from .api import health, models, libraries, videos, media, search, jobs, settings, logs, stats, assets, faces, backup, network, maintenance, favorites
 from .ws.handler import websocket_handler
 from .core.lifecycle import LifecycleManager, repair_consistency
 from .core.indexer import auto_continue_indexing
 from .db.connection import init_database
+from .middleware.origin import OriginValidationMiddleware
 from .utils.logging import setup_logging, get_logger
 from .utils.paths import get_data_dir
 
@@ -73,13 +74,29 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Add CORS middleware
+    # Add Origin validation middleware (before CORS)
+    app.add_middleware(OriginValidationMiddleware)
+    
+    # Add CORS middleware - strict origin allowlist
+    # Only allow Tauri app origin (tauri://localhost) and localhost for dev
+    allowed_origins = [
+        "tauri://localhost",  # Tauri app origin
+        "http://localhost:1420",  # Dev server (only in debug mode)
+    ]
+    
+    # In production, only allow Tauri origin
+    import os
+    if os.environ.get("GAZE_LOG_LEVEL", "INFO").upper() != "DEBUG":
+        allowed_origins = ["tauri://localhost"]
+    
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Allow Tauri dev server
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=allowed_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_headers=["Authorization", "Content-Type"],
+        expose_headers=[],
+        max_age=0,  # Don't cache preflight
     )
 
     # Include routers
@@ -98,6 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(backup.router)
     app.include_router(network.router)
     app.include_router(maintenance.router)
+    app.include_router(favorites.router)
 
     # WebSocket endpoint
     @app.websocket("/ws")
@@ -117,18 +135,18 @@ def main() -> None:
     parser.add_argument("--log-level", type=str, default="INFO", help="Log level")
     args = parser.parse_args()
 
-    # Set up logging
-    setup_logging(args.log_level)
-
-    # Set environment variables for use throughout the app
+    # Set environment variables early (before setup_logging) so middleware can use them
     os.environ["GAZE_ENGINE_UUID"] = ENGINE_UUID
     os.environ["GAZE_AUTH_TOKEN"] = args.token
     os.environ["GAZE_PORT"] = str(args.port)  # Set port for lockfile
+    os.environ["GAZE_LOG_LEVEL"] = args.log_level.upper()  # Set early for middleware
     if args.parent_pid:
         os.environ["GAZE_PARENT_PID"] = str(args.parent_pid)
     if args.data_dir:
         os.environ["GAZE_DATA_DIR"] = args.data_dir
-    os.environ["GAZE_LOG_LEVEL"] = args.log_level.upper()
+
+    # Set up logging (after env vars are set)
+    setup_logging(args.log_level)
 
     logger.info(f"Starting on port {args.port}")
 

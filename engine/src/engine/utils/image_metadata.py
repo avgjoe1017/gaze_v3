@@ -38,6 +38,36 @@ def _convert_gps_to_degrees(value: Any) -> float | None:
         return None
 
 
+def _parse_exif_date(exif_str: str | None) -> str | None:
+    """Convert EXIF date '2024:01:15 14:30:00' to ISO '2024-01-15T14:30:00'."""
+    if not exif_str:
+        return None
+
+    exif_str = str(exif_str).strip()
+
+    try:
+        # EXIF format: "YYYY:MM:DD HH:MM:SS"
+        dt = datetime.strptime(exif_str, "%Y:%m:%d %H:%M:%S")
+        iso_date = dt.isoformat()
+        return iso_date
+    except Exception as e1:
+        # Try alternate format without time
+        try:
+            dt = datetime.strptime(exif_str, "%Y:%m:%d")
+            iso_date = dt.isoformat()
+            return iso_date
+        except Exception as e2:
+            # Try with dashes instead of colons (already ISO-ish)
+            try:
+                dt = datetime.fromisoformat(exif_str.replace(" ", "T"))
+                return dt.isoformat()
+            except Exception as e3:
+                from ..utils.logging import get_logger
+                logger = get_logger(__name__)
+                logger.warning(f"Failed to parse EXIF date '{exif_str}': {e1}, {e2}, {e3}")
+                return None
+
+
 def _get_image_metadata_sync(image_path: Path) -> dict[str, Any]:
     result: dict[str, Any] = {
         "width": None,
@@ -82,7 +112,8 @@ def _get_image_metadata_sync(image_path: Path) -> dict[str, Any]:
                     creation_time = creation_time.decode(errors="ignore")
                 except Exception:
                     pass
-            result["creation_time"] = creation_time
+            # Parse EXIF date to ISO format
+            result["creation_time"] = _parse_exif_date(creation_time)
 
             result["camera_make"] = exif_data.get("Make")
             result["camera_model"] = exif_data.get("Model")

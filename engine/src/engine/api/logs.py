@@ -37,6 +37,7 @@ async def get_logs(
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] | None = Query(
         None, description="Filter by log level"
     ),
+    redact_paths: bool = Query(False, description="Redact file paths and filenames for privacy"),
     _token: str = Depends(verify_token),
 ) -> LogsResponse:
     """Get log entries from the log file."""
@@ -72,6 +73,18 @@ async def get_logs(
                 line for line in selected_lines if f"| {level:8s} |" in line or f"| {level.upper():8s} |" in line
             ]
 
+        # Redact paths if requested
+        if redact_paths:
+            import re
+            # Pattern to match file paths (Windows and Unix)
+            path_pattern = re.compile(
+                r'(?:[A-Za-z]:)?(?:[/\\][^\s<>"|:]+)+|'  # Windows/Unix paths
+                r'[A-Za-z]:\\[^<>"|:\s]+'  # Windows drive paths
+            )
+            selected_lines = [
+                path_pattern.sub("[REDACTED_PATH]", line) for line in selected_lines
+            ]
+        
         # Convert to LogEntry objects
         start_line = total_lines - len(selected_lines) if tail else 0
         entries = [

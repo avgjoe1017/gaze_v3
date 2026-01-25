@@ -20,14 +20,28 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# Step 2: Verify engine binary exists
-Write-Host "`n[2/4] Verifying engine binary..." -ForegroundColor Yellow
-$BinaryPath = Join-Path $RootDir "app" "src-tauri" "binaries" "gaze-engine-x86_64-pc-windows-msvc.exe"
-if (-not (Test-Path $BinaryPath)) {
-    Write-Host "Engine binary not found at: $BinaryPath" -ForegroundColor Red
+# Step 2: Verify binaries exist
+Write-Host "`n[2/4] Verifying binaries..." -ForegroundColor Yellow
+$BinariesDir = Join-Path $RootDir "app" "src-tauri" "binaries"
+
+# Check engine binary
+$EngineBinary = Join-Path $BinariesDir "gaze-engine-x86_64-pc-windows-msvc.exe"
+if (-not (Test-Path $EngineBinary)) {
+    Write-Host "Engine binary not found at: $EngineBinary" -ForegroundColor Red
     exit 1
 }
-Write-Host "Engine binary found" -ForegroundColor Green
+Write-Host "✓ Engine binary found" -ForegroundColor Green
+
+# Check FFmpeg binaries (warn if missing, but don't fail build)
+$FfmpegBinary = Join-Path $BinariesDir "ffmpeg-x86_64-pc-windows-msvc.exe"
+$FfprobeBinary = Join-Path $BinariesDir "ffprobe-x86_64-pc-windows-msvc.exe"
+if (-not (Test-Path $FfmpegBinary) -or -not (Test-Path $FfprobeBinary)) {
+    Write-Host "⚠ FFmpeg binaries not found (optional for dev builds)" -ForegroundColor Yellow
+    Write-Host "  Run: scripts\download-ffmpeg-binaries.ps1" -ForegroundColor Yellow
+    Write-Host "  Or see: app\src-tauri\binaries\README.md" -ForegroundColor Yellow
+} else {
+    Write-Host "✓ FFmpeg binaries found" -ForegroundColor Green
+}
 
 # Step 3: Install npm dependencies
 Write-Host "`n[3/4] Installing npm dependencies..." -ForegroundColor Yellow

@@ -5,7 +5,7 @@ import json
 import sqlite3
 import uuid
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -57,6 +57,148 @@ router = APIRouter(
 
 
 # =============================================================================
+# Helper Functions
+# =============================================================================
+
+
+async def select_best_thumbnail(person_id: str, db) -> str | None:
+    """Select face with highest similarity to person's average embedding (centroid).
+
+    This ensures the thumbnail is the most representative face for this person.
+    """
+    # Get all face embeddings for this person
+    cursor = await db.execute(
+        """
+        SELECT face_id, embedding
+        FROM faces
+        WHERE person_id = ? AND embedding IS NOT NULL
+        """,
+        (person_id,),
+    )
+    faces = await cursor.fetchall()
+
+    if not faces:
+        return None
+
+    if len(faces) == 1:
+        return faces[0]["face_id"]
+
+    # Convert embeddings to numpy arrays
+    embeddings = []
+    face_ids = []
+    for face in faces:
+        try:
+            emb = bytes_to_embedding(face["embedding"])
+            if emb is not None:
+                embeddings.append(emb)
+                face_ids.append(face["face_id"])
+        except Exception as e:
+            logger.warning(f"Failed to parse embedding for face {face['face_id']}: {e}")
+            continue
+
+    if not embeddings:
+        return None
+
+    # Compute centroid (average embedding)
+    embeddings_array = np.array(embeddings)
+    centroid = np.mean(embeddings_array, axis=0)
+
+    # Find face closest to centroid
+    best_face_id = None
+    best_similarity = -1.0
+
+    for face_id, emb in zip(face_ids, embeddings):
+        # Compute cosine similarity
+        similarity = compute_face_similarity(emb, centroid)
+        if similarity > best_similarity:
+            best_similarity = similarity
+            best_face_id = face_id
+
+    return best_face_id
+
+
+async def reanalyze_after_retag(
+    old_person_id: str | None,
+    new_person_id: str,
+    db,
+) -> list[dict]:
+    """Re-check unassigned faces after a face is reassigned.
+
+    Returns suggestions for faces that might belong to either person.
+    """
+    suggestions = []
+
+    # Get embeddings for the new person
+    cursor = await db.execute(
+        """
+        SELECT face_id, embedding
+        FROM faces
+        WHERE person_id = ? AND embedding IS NOT NULL
+        LIMIT 10
+        """,
+        (new_person_id,),
+    )
+    new_person_faces = await cursor.fetchall()
+
+    if not new_person_faces:
+        return suggestions
+
+    # Parse embeddings
+    new_embeddings = []
+    for face in new_person_faces:
+        try:
+            emb = bytes_to_embedding(face["embedding"])
+            if emb is not None:
+                new_embeddings.append(emb)
+        except Exception:
+            continue
+
+    if not new_embeddings:
+        return suggestions
+
+    # Compute average embedding for new person
+    new_person_centroid = np.mean(np.array(new_embeddings), axis=0)
+
+    # Get unassigned faces
+    cursor = await db.execute(
+        """
+        SELECT face_id, embedding, crop_path
+        FROM faces
+        WHERE person_id IS NULL AND embedding IS NOT NULL
+        LIMIT 100
+        """
+    )
+    unassigned_faces = await cursor.fetchall()
+
+    # Check similarity to new person
+    for face in unassigned_faces:
+        try:
+            face_emb = bytes_to_embedding(face["embedding"])
+            if face_emb is None:
+                continue
+
+            similarity = compute_face_similarity(face_emb, new_person_centroid)
+
+            # Higher threshold for suggestions (0.65)
+            if similarity > 0.65:
+                suggestions.append({
+                    "face_id": face["face_id"],
+                    "suggested_person_id": new_person_id,
+                    "confidence": float(similarity),
+                    "crop_path": face["crop_path"],
+                })
+        except Exception as e:
+            logger.warning(f"Failed to check face {face['face_id']}: {e}")
+            continue
+
+    # Sort by confidence descending
+    suggestions.sort(key=lambda x: x["confidence"], reverse=True)
+
+    # Return top 10 suggestions
+    return suggestions[:10]
+
+
+# =============================================================================
 # Models
 # =============================================================================
 
@@ -97,6 +239,7 @@ class Person(BaseModel):
     face_count: int = 0
     thumbnail_face_id: str | None = None
     thumbnail_crop_path: str | None = None
+    recognition_mode: str = "average"
     created_at_ms: int
     updated_at_ms: int
 
@@ -125,7 +268,7 @@ class UpdatePersonRequest(BaseModel):
 class AssignFaceRequest(BaseModel):
     """Assign face to person request."""
 
-    person_id: str
+    person_id: str | None
 
 
 class MergeFacesRequest(BaseModel):
@@ -163,6 +306,22 @@ class SimilarFacesResponse(BaseModel):
 
     faces: list[Face]
     similarities: list[float]
+
+
+class ConfusingPair(BaseModel):
+    """Confusing person pair model."""
+    person_a_id: str
+    person_a_name: str
+    person_b_id: str
+    person_b_name: str
+    threshold: float
+    correction_count: int
+
+
+class ConfusingPairsResponse(BaseModel):
+    """Confusing pairs response."""
+    pairs: list[ConfusingPair]
+    total: int
 
 
 # =============================================================================
@@ -285,7 +444,9 @@ async def list_persons(
         # Get persons with thumbnail info
         cursor = await db.execute(
             f"""
-            SELECT p.*, f.crop_path as thumbnail_crop_path
+            SELECT p.person_id, p.name, p.face_count, p.thumbnail_face_id,
+                   p.recognition_mode, p.created_at_ms, p.updated_at_ms,
+                   f.crop_path as thumbnail_crop_path
             FROM persons p
             LEFT JOIN faces f ON p.thumbnail_face_id = f.face_id
             WHERE {where_clause}
@@ -303,6 +464,7 @@ async def list_persons(
                 face_count=row["face_count"],
                 thumbnail_face_id=row["thumbnail_face_id"],
                 thumbnail_crop_path=row["thumbnail_crop_path"],
+                recognition_mode=row["recognition_mode"] or "average",
                 created_at_ms=row["created_at_ms"],
                 updated_at_ms=row["updated_at_ms"],
             )
@@ -349,6 +511,9 @@ async def create_person(
                     (person_id, face_id),
                 )
 
+            # Select best thumbnail based on similarity to centroid
+            best_thumbnail = await select_best_thumbnail(person_id, db)
+
             # Update face count and set thumbnail
             await db.execute(
                 """
@@ -357,7 +522,7 @@ async def create_person(
                     thumbnail_face_id = ?
                 WHERE person_id = ?
                 """,
-                (person_id, request.face_ids[0], person_id),
+                (person_id, best_thumbnail, person_id),
             )
 
         await db.commit()
@@ -365,7 +530,9 @@ async def create_person(
         # Get the created person
         cursor = await db.execute(
             """
-            SELECT p.*, f.crop_path as thumbnail_crop_path
+            SELECT p.person_id, p.name, p.face_count, p.thumbnail_face_id,
+                   p.recognition_mode, p.created_at_ms, p.updated_at_ms,
+                   f.crop_path as thumbnail_crop_path
             FROM persons p
             LEFT JOIN faces f ON p.thumbnail_face_id = f.face_id
             WHERE p.person_id = ?
@@ -380,6 +547,7 @@ async def create_person(
             face_count=row["face_count"],
             thumbnail_face_id=row["thumbnail_face_id"],
             thumbnail_crop_path=row["thumbnail_crop_path"],
+            recognition_mode=row["recognition_mode"] or "average",
             created_at_ms=row["created_at_ms"],
             updated_at_ms=row["updated_at_ms"],
         )
@@ -396,7 +564,9 @@ async def get_person(
     async for db in get_db():
         cursor = await db.execute(
             """
-            SELECT p.*, f.crop_path as thumbnail_crop_path
+            SELECT p.person_id, p.name, p.face_count, p.thumbnail_face_id,
+                   p.recognition_mode, p.created_at_ms, p.updated_at_ms,
+                   f.crop_path as thumbnail_crop_path
             FROM persons p
             LEFT JOIN faces f ON p.thumbnail_face_id = f.face_id
             WHERE p.person_id = ?
@@ -414,6 +584,7 @@ async def get_person(
             face_count=row["face_count"],
             thumbnail_face_id=row["thumbnail_face_id"],
             thumbnail_crop_path=row["thumbnail_crop_path"],
+            recognition_mode=row["recognition_mode"] or "average",
             created_at_ms=row["created_at_ms"],
             updated_at_ms=row["updated_at_ms"],
         )
@@ -478,7 +649,9 @@ async def update_person(
         # Get updated person
         cursor = await db.execute(
             """
-            SELECT p.*, f.crop_path as thumbnail_crop_path
+            SELECT p.person_id, p.name, p.face_count, p.thumbnail_face_id,
+                   p.recognition_mode, p.created_at_ms, p.updated_at_ms,
+                   f.crop_path as thumbnail_crop_path
             FROM persons p
             LEFT JOIN faces f ON p.thumbnail_face_id = f.face_id
             WHERE p.person_id = ?
@@ -493,6 +666,7 @@ async def update_person(
             face_count=row["face_count"],
             thumbnail_face_id=row["thumbnail_face_id"],
             thumbnail_crop_path=row["thumbnail_crop_path"],
+            recognition_mode=row["recognition_mode"] or "average",
             created_at_ms=row["created_at_ms"],
             updated_at_ms=row["updated_at_ms"],
         )
@@ -545,6 +719,149 @@ async def delete_person(
         return {"success": True, "person_id": person_id}
 
     raise HTTPException(status_code=500, detail="Database error")
+
+
+# =============================================================================
+# Stats (must be before /{face_id} to avoid path conflict)
+# =============================================================================
+
+
+@router.get("/stats")
+async def get_face_stats(
+    _token: str = Depends(verify_token),
+) -> dict:
+    """Get face-related statistics including learning system metrics."""
+    async for db in get_db():
+        stats = {}
+
+        # Total faces
+        cursor = await db.execute("SELECT COUNT(*) as count FROM faces")
+        row = await cursor.fetchone()
+        stats["total_faces"] = row["count"] if row else 0
+
+        # Assigned faces
+        cursor = await db.execute("SELECT COUNT(*) as count FROM faces WHERE person_id IS NOT NULL")
+        row = await cursor.fetchone()
+        stats["assigned_faces"] = row["count"] if row else 0
+
+        # Unassigned faces
+        stats["unassigned_faces"] = stats["total_faces"] - stats["assigned_faces"]
+
+        # Total persons
+        cursor = await db.execute("SELECT COUNT(*) as count FROM persons")
+        row = await cursor.fetchone()
+        stats["total_persons"] = row["count"] if row else 0
+
+        # Unique clusters
+        cursor = await db.execute("SELECT COUNT(DISTINCT cluster_id) as count FROM faces WHERE cluster_id IS NOT NULL")
+        row = await cursor.fetchone()
+        stats["unique_clusters"] = row["count"] if row else 0
+
+        # Videos with faces
+        cursor = await db.execute("SELECT COUNT(DISTINCT video_id) as count FROM faces")
+        row = await cursor.fetchone()
+        stats["videos_with_faces"] = row["count"] if row else 0
+
+        # Learning system stats
+        # Reference faces
+        cursor = await db.execute("SELECT COUNT(*) as count FROM face_references")
+        row = await cursor.fetchone()
+        stats["reference_faces"] = row["count"] if row else 0
+
+        # Negative examples
+        cursor = await db.execute("SELECT COUNT(*) as count FROM face_negatives")
+        row = await cursor.fetchone()
+        stats["negative_examples"] = row["count"] if row else 0
+
+        # Confusing pairs
+        cursor = await db.execute("SELECT COUNT(*) as count FROM person_pair_thresholds")
+        row = await cursor.fetchone()
+        stats["confusing_pairs"] = row["count"] if row else 0
+
+        # Faces by assignment source
+        cursor = await db.execute(
+            """
+            SELECT assignment_source, COUNT(*) as count
+            FROM faces
+            WHERE person_id IS NOT NULL
+            GROUP BY assignment_source
+            """
+        )
+        source_rows = await cursor.fetchall()
+        stats["assignments_by_source"] = {
+            row["assignment_source"] or "legacy": row["count"]
+            for row in source_rows
+        }
+
+        # Faces needing review (low confidence auto-assignments)
+        cursor = await db.execute(
+            """
+            SELECT COUNT(*) as count FROM faces
+            WHERE assignment_source = 'auto'
+              AND assignment_confidence IS NOT NULL
+              AND assignment_confidence < 0.75
+            """
+        )
+        row = await cursor.fetchone()
+        stats["faces_needing_review"] = row["count"] if row else 0
+
+        return stats
+
+    raise HTTPException(status_code=500, detail="Database error")
+
+
+@router.get("/confusing-pairs", response_model=ConfusingPairsResponse)
+async def get_all_confusing_pairs(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    _token: str = Depends(verify_token),
+) -> ConfusingPairsResponse:
+    """
+    Get all pairs of people that are frequently confused.
+
+    Returns person pairs sorted by correction count (most corrected first).
+    """
+    async for db in get_db():
+        # Get total count
+        cursor = await db.execute("SELECT COUNT(*) as count FROM person_pair_thresholds")
+        row = await cursor.fetchone()
+        total = row["count"] if row else 0
+
+        # Get pairs
+        cursor = await db.execute(
+            """
+            SELECT ppt.person_a_id, ppt.person_b_id, ppt.threshold, ppt.correction_count,
+                   pa.name as person_a_name, pb.name as person_b_name
+            FROM person_pair_thresholds ppt
+            JOIN persons pa ON ppt.person_a_id = pa.person_id
+            JOIN persons pb ON ppt.person_b_id = pb.person_id
+            ORDER BY ppt.correction_count DESC, ppt.threshold DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        )
+        rows = await cursor.fetchall()
+
+        pairs = [
+            ConfusingPair(
+                person_a_id=row["person_a_id"],
+                person_a_name=row["person_a_name"],
+                person_b_id=row["person_b_id"],
+                person_b_name=row["person_b_name"],
+                threshold=row["threshold"],
+                correction_count=row["correction_count"],
+            )
+            for row in rows
+        ]
+
+        return ConfusingPairsResponse(pairs=pairs, total=total)
+
+    return ConfusingPairsResponse(pairs=[], total=0)
+
+
+# =============================================================================
+# Individual face operations
+# =============================================================================
 
 
 @router.get("/{face_id}", response_model=Face)
@@ -670,44 +987,158 @@ async def assign_face_to_person(
     request: AssignFaceRequest,
     _token: str = Depends(verify_token),
 ) -> dict:
-    """Assign a face to a person."""
+    """
+    Assign a face to a person.
+
+    This endpoint also records learning signals:
+    - If the face was previously assigned to a different person, that becomes a negative example
+    - Pair thresholds are updated for frequently confused person pairs
+    - Assignment is marked as 'manual' source for weighted learning
+    """
+    now_ms = int(datetime.now().timestamp() * 1000)
+
     async for db in get_db():
-        # Verify face exists
+        # Get face info including current assignment
         cursor = await db.execute(
-            "SELECT face_id FROM faces WHERE face_id = ?",
+            "SELECT face_id, person_id FROM faces WHERE face_id = ?",
             (face_id,),
         )
-        if not await cursor.fetchone():
+        face_row = await cursor.fetchone()
+        if not face_row:
             raise HTTPException(status_code=404, detail="Face not found")
 
-        # Verify person exists
-        cursor = await db.execute(
-            "SELECT person_id FROM persons WHERE person_id = ?",
-            (request.person_id,),
-        )
-        if not await cursor.fetchone():
-            raise HTTPException(status_code=404, detail="Person not found")
+        previous_person_id = face_row["person_id"]
 
-        # Update face
-        await db.execute(
-            "UPDATE faces SET person_id = ? WHERE face_id = ?",
-            (request.person_id, face_id),
-        )
+        # Verify target person exists (skip if unassigning)
+        if request.person_id is not None:
+            cursor = await db.execute(
+                "SELECT person_id FROM persons WHERE person_id = ?",
+                (request.person_id,),
+            )
+            if not await cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Person not found")
 
-        # Update person face count
+        # Record learning signals if this is a reassignment (correction)
+        learning_recorded = False
+        if previous_person_id and request.person_id and previous_person_id != request.person_id:
+            # Add negative example: this face should NOT match the previous person
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO face_negatives (face_id, person_id, created_at_ms)
+                VALUES (?, ?, ?)
+                """,
+                (face_id, previous_person_id, now_ms),
+            )
+
+            # Update or create pair threshold for this confusing pair
+            # Sort IDs for consistent key
+            pair = tuple(sorted([previous_person_id, request.person_id]))
+            cursor = await db.execute(
+                """
+                SELECT id, threshold, correction_count
+                FROM person_pair_thresholds
+                WHERE person_a_id = ? AND person_b_id = ?
+                """,
+                pair,
+            )
+            pair_row = await cursor.fetchone()
+
+            if pair_row:
+                # Increment threshold (cap at 0.85)
+                new_threshold = min(pair_row["threshold"] + 0.02, 0.85)
+                new_count = pair_row["correction_count"] + 1
+                await db.execute(
+                    """
+                    UPDATE person_pair_thresholds
+                    SET threshold = ?, correction_count = ?, updated_at_ms = ?
+                    WHERE id = ?
+                    """,
+                    (new_threshold, new_count, now_ms, pair_row["id"]),
+                )
+            else:
+                # Create new pair threshold starting at 0.70
+                await db.execute(
+                    """
+                    INSERT INTO person_pair_thresholds
+                    (person_a_id, person_b_id, threshold, correction_count, created_at_ms, updated_at_ms)
+                    VALUES (?, ?, 0.70, 1, ?, ?)
+                    """,
+                    (pair[0], pair[1], now_ms, now_ms),
+                )
+
+            learning_recorded = True
+            logger.info(
+                f"Recorded learning signal: face {face_id} reassigned from "
+                f"{previous_person_id} to {request.person_id}"
+            )
+
+        # Update face with manual assignment
         await db.execute(
             """
-            UPDATE persons
-            SET face_count = (SELECT COUNT(*) FROM faces WHERE person_id = ?),
-                updated_at_ms = ?
-            WHERE person_id = ?
+            UPDATE faces
+            SET person_id = ?,
+                assignment_source = 'manual',
+                assignment_confidence = 1.0,
+                assigned_at_ms = ?
+            WHERE face_id = ?
             """,
-            (request.person_id, int(datetime.now().timestamp() * 1000), request.person_id),
+            (request.person_id, now_ms, face_id),
         )
+
+        # Update face counts for new person (if assigning, not unassigning)
+        if request.person_id is not None:
+            await db.execute(
+                """
+                UPDATE persons
+                SET face_count = (SELECT COUNT(*) FROM faces WHERE person_id = ?),
+                    updated_at_ms = ?
+                WHERE person_id = ?
+                """,
+                (request.person_id, now_ms, request.person_id),
+            )
+
+        # Update face count for previous person
+        if previous_person_id and previous_person_id != request.person_id:
+            await db.execute(
+                """
+                UPDATE persons
+                SET face_count = (SELECT COUNT(*) FROM faces WHERE person_id = ?),
+                    updated_at_ms = ?
+                WHERE person_id = ?
+                """,
+                (previous_person_id, now_ms, previous_person_id),
+            )
+            # Update thumbnail for old person
+            old_best_thumbnail = await select_best_thumbnail(previous_person_id, db)
+            if old_best_thumbnail:
+                await db.execute(
+                    "UPDATE persons SET thumbnail_face_id = ? WHERE person_id = ?",
+                    (old_best_thumbnail, previous_person_id),
+                )
+
+        # Update thumbnail for new person (if assigning)
+        if request.person_id is not None:
+            new_best_thumbnail = await select_best_thumbnail(request.person_id, db)
+            if new_best_thumbnail:
+                await db.execute(
+                    "UPDATE persons SET thumbnail_face_id = ? WHERE person_id = ?",
+                    (new_best_thumbnail, request.person_id),
+                )
+
+        # Trigger re-analysis to find similar unassigned faces (only when assigning to a person)
+        suggestions = []
+        if request.person_id is not None:
+            suggestions = await reanalyze_after_retag(previous_person_id, request.person_id, db)
 
         await db.commit()
 
-        return {"success": True, "face_id": face_id, "person_id": request.person_id}
+        return {
+            "success": True,
+            "face_id": face_id,
+            "person_id": request.person_id,
+            "learning_recorded": learning_recorded,
+            "suggestions": suggestions,
+        }
 
     raise HTTPException(status_code=500, detail="Database error")
 
@@ -971,49 +1402,362 @@ async def cluster_faces(
 
 
 # =============================================================================
-# Stats
+# Learning System Endpoints
 # =============================================================================
 
 
-@router.get("/stats")
-async def get_face_stats(
+class MarkReferenceRequest(BaseModel):
+    """Mark face as reference request."""
+    weight: float = 1.0
+
+
+class SetRecognitionModeRequest(BaseModel):
+    """Set recognition mode request."""
+    mode: Literal["average", "reference_only", "weighted"]
+
+
+class FaceReference(BaseModel):
+    """Face reference model."""
+    face_id: str
+    person_id: str
+    weight: float
+    crop_path: str | None = None
+    created_at_ms: int
+
+
+class FaceReferencesResponse(BaseModel):
+    """Face references response."""
+    references: list[FaceReference]
+    total: int
+
+
+class ReviewQueueFace(BaseModel):
+    """Face in review queue."""
+    face_id: str
+    video_id: str
+    frame_id: str
+    timestamp_ms: int
+    crop_path: str | None = None
+    person_id: str | None = None
+    person_name: str | None = None
+    assignment_confidence: float | None = None
+    assignment_source: str | None = None
+
+
+class ReviewQueueResponse(BaseModel):
+    """Review queue response."""
+    faces: list[ReviewQueueFace]
+    total: int
+
+
+@router.post("/{face_id}/mark-reference")
+async def mark_face_as_reference(
+    face_id: str,
+    request: MarkReferenceRequest = MarkReferenceRequest(),
     _token: str = Depends(verify_token),
 ) -> dict:
-    """Get face-related statistics."""
+    """
+    Mark a face as a canonical reference for its assigned person.
+
+    Reference faces are weighted heavily in recognition and are used
+    as the primary comparison targets for 'reference_only' mode.
+    """
+    now_ms = int(datetime.now().timestamp() * 1000)
+
     async for db in get_db():
-        stats = {}
+        # Get face and verify it's assigned to a person
+        cursor = await db.execute(
+            "SELECT face_id, person_id FROM faces WHERE face_id = ?",
+            (face_id,),
+        )
+        face_row = await cursor.fetchone()
 
-        # Total faces
-        cursor = await db.execute("SELECT COUNT(*) as count FROM faces")
+        if not face_row:
+            raise HTTPException(status_code=404, detail="Face not found")
+
+        if not face_row["person_id"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Face must be assigned to a person before marking as reference"
+            )
+
+        person_id = face_row["person_id"]
+
+        # Insert or update reference
+        await db.execute(
+            """
+            INSERT INTO face_references (face_id, person_id, weight, created_at_ms)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(face_id, person_id) DO UPDATE SET weight = ?
+            """,
+            (face_id, person_id, request.weight, now_ms, request.weight),
+        )
+
+        # Update face assignment source to 'reference'
+        await db.execute(
+            """
+            UPDATE faces
+            SET assignment_source = 'reference',
+                assignment_confidence = 1.0,
+                assigned_at_ms = ?
+            WHERE face_id = ?
+            """,
+            (now_ms, face_id),
+        )
+
+        await db.commit()
+
+        return {
+            "success": True,
+            "face_id": face_id,
+            "person_id": person_id,
+            "weight": request.weight,
+        }
+
+    raise HTTPException(status_code=500, detail="Database error")
+
+
+@router.delete("/{face_id}/mark-reference")
+async def unmark_face_as_reference(
+    face_id: str,
+    _token: str = Depends(verify_token),
+) -> dict:
+    """Remove reference status from a face."""
+    now_ms = int(datetime.now().timestamp() * 1000)
+
+    async for db in get_db():
+        # Delete reference
+        cursor = await db.execute(
+            "DELETE FROM face_references WHERE face_id = ?",
+            (face_id,),
+        )
+
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Face reference not found")
+
+        # Update face assignment source back to 'manual'
+        await db.execute(
+            """
+            UPDATE faces
+            SET assignment_source = 'manual',
+                assigned_at_ms = ?
+            WHERE face_id = ?
+            """,
+            (now_ms, face_id),
+        )
+
+        await db.commit()
+
+        return {"success": True, "face_id": face_id}
+
+    raise HTTPException(status_code=500, detail="Database error")
+
+
+@router.get("/review-queue", response_model=ReviewQueueResponse)
+async def get_faces_for_review(
+    confidence_threshold: float = Query(0.75, ge=0.0, le=1.0, description="Max confidence to include"),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    _token: str = Depends(verify_token),
+) -> ReviewQueueResponse:
+    """
+    Get low-confidence face assignments that need review.
+
+    Returns faces that were auto-assigned but have confidence below
+    the threshold, sorted by confidence ascending (least confident first).
+    """
+    async for db in get_db():
+        # Get total count
+        cursor = await db.execute(
+            """
+            SELECT COUNT(*) as count FROM faces
+            WHERE assignment_source = 'auto'
+              AND assignment_confidence IS NOT NULL
+              AND assignment_confidence < ?
+            """,
+            (confidence_threshold,),
+        )
         row = await cursor.fetchone()
-        stats["total_faces"] = row["count"] if row else 0
+        total = row["count"] if row else 0
 
-        # Assigned faces
-        cursor = await db.execute("SELECT COUNT(*) as count FROM faces WHERE person_id IS NOT NULL")
-        row = await cursor.fetchone()
-        stats["assigned_faces"] = row["count"] if row else 0
+        # Get faces for review
+        cursor = await db.execute(
+            """
+            SELECT f.face_id, f.video_id, f.frame_id, f.timestamp_ms,
+                   f.crop_path, f.person_id, f.assignment_confidence, f.assignment_source,
+                   p.name as person_name
+            FROM faces f
+            LEFT JOIN persons p ON f.person_id = p.person_id
+            WHERE f.assignment_source = 'auto'
+              AND f.assignment_confidence IS NOT NULL
+              AND f.assignment_confidence < ?
+            ORDER BY f.assignment_confidence ASC
+            LIMIT ? OFFSET ?
+            """,
+            (confidence_threshold, limit, offset),
+        )
+        rows = await cursor.fetchall()
 
-        # Unassigned faces
-        stats["unassigned_faces"] = stats["total_faces"] - stats["assigned_faces"]
+        faces = [
+            ReviewQueueFace(
+                face_id=row["face_id"],
+                video_id=row["video_id"],
+                frame_id=row["frame_id"],
+                timestamp_ms=row["timestamp_ms"],
+                crop_path=row["crop_path"],
+                person_id=row["person_id"],
+                person_name=row["person_name"],
+                assignment_confidence=row["assignment_confidence"],
+                assignment_source=row["assignment_source"],
+            )
+            for row in rows
+        ]
 
-        # Total persons
-        cursor = await db.execute("SELECT COUNT(*) as count FROM persons")
-        row = await cursor.fetchone()
-        stats["total_persons"] = row["count"] if row else 0
+        return ReviewQueueResponse(faces=faces, total=total)
 
-        # Unique clusters
-        cursor = await db.execute("SELECT COUNT(DISTINCT cluster_id) as count FROM faces WHERE cluster_id IS NOT NULL")
-        row = await cursor.fetchone()
-        stats["unique_clusters"] = row["count"] if row else 0
+    return ReviewQueueResponse(faces=[], total=0)
 
-        # Videos with faces
-        cursor = await db.execute("SELECT COUNT(DISTINCT video_id) as count FROM faces")
-        row = await cursor.fetchone()
-        stats["videos_with_faces"] = row["count"] if row else 0
 
-        return stats
+@router.put("/persons/{person_id}/recognition-mode")
+async def set_person_recognition_mode(
+    person_id: str,
+    request: SetRecognitionModeRequest,
+    _token: str = Depends(verify_token),
+) -> dict:
+    """
+    Set the recognition mode for a person.
 
-    return {}
+    Modes:
+    - 'average': Use weighted average of all face embeddings (default)
+    - 'reference_only': Only compare against reference faces (best for distinguishing similar people)
+    - 'weighted': Weighted average with extra emphasis on reference faces
+    """
+    now_ms = int(datetime.now().timestamp() * 1000)
+
+    async for db in get_db():
+        # Verify person exists
+        cursor = await db.execute(
+            "SELECT person_id FROM persons WHERE person_id = ?",
+            (person_id,),
+        )
+        if not await cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        # Update recognition mode
+        await db.execute(
+            """
+            UPDATE persons
+            SET recognition_mode = ?, updated_at_ms = ?
+            WHERE person_id = ?
+            """,
+            (request.mode, now_ms, person_id),
+        )
+
+        await db.commit()
+
+        return {
+            "success": True,
+            "person_id": person_id,
+            "recognition_mode": request.mode,
+        }
+
+    raise HTTPException(status_code=500, detail="Database error")
+
+
+@router.get("/persons/{person_id}/references", response_model=FaceReferencesResponse)
+async def get_person_references(
+    person_id: str,
+    _token: str = Depends(verify_token),
+) -> FaceReferencesResponse:
+    """Get all reference faces for a person."""
+    async for db in get_db():
+        # Verify person exists
+        cursor = await db.execute(
+            "SELECT person_id FROM persons WHERE person_id = ?",
+            (person_id,),
+        )
+        if not await cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        # Get references
+        cursor = await db.execute(
+            """
+            SELECT fr.face_id, fr.person_id, fr.weight, fr.created_at_ms,
+                   f.crop_path
+            FROM face_references fr
+            JOIN faces f ON fr.face_id = f.face_id
+            WHERE fr.person_id = ?
+            ORDER BY fr.weight DESC, fr.created_at_ms DESC
+            """,
+            (person_id,),
+        )
+        rows = await cursor.fetchall()
+
+        references = [
+            FaceReference(
+                face_id=row["face_id"],
+                person_id=row["person_id"],
+                weight=row["weight"],
+                crop_path=row["crop_path"],
+                created_at_ms=row["created_at_ms"],
+            )
+            for row in rows
+        ]
+
+        return FaceReferencesResponse(references=references, total=len(references))
+
+    return FaceReferencesResponse(references=[], total=0)
+
+
+@router.get("/persons/{person_id}/confusing-pairs", response_model=ConfusingPairsResponse)
+async def get_confusing_pairs(
+    person_id: str,
+    _token: str = Depends(verify_token),
+) -> ConfusingPairsResponse:
+    """
+    Get pairs of people that are frequently confused with this person.
+
+    Returns person pairs with elevated thresholds due to correction history.
+    """
+    async for db in get_db():
+        # Verify person exists
+        cursor = await db.execute(
+            "SELECT person_id FROM persons WHERE person_id = ?",
+            (person_id,),
+        )
+        if not await cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Person not found")
+
+        # Get pairs involving this person
+        cursor = await db.execute(
+            """
+            SELECT ppt.person_a_id, ppt.person_b_id, ppt.threshold, ppt.correction_count,
+                   pa.name as person_a_name, pb.name as person_b_name
+            FROM person_pair_thresholds ppt
+            JOIN persons pa ON ppt.person_a_id = pa.person_id
+            JOIN persons pb ON ppt.person_b_id = pb.person_id
+            WHERE ppt.person_a_id = ? OR ppt.person_b_id = ?
+            ORDER BY ppt.correction_count DESC
+            """,
+            (person_id, person_id),
+        )
+        rows = await cursor.fetchall()
+
+        pairs = [
+            ConfusingPair(
+                person_a_id=row["person_a_id"],
+                person_a_name=row["person_a_name"],
+                person_b_id=row["person_b_id"],
+                person_b_name=row["person_b_name"],
+                threshold=row["threshold"],
+                correction_count=row["correction_count"],
+            )
+            for row in rows
+        ]
+
+        return ConfusingPairsResponse(pairs=pairs, total=len(pairs))
+
+    return ConfusingPairsResponse(pairs=[], total=0)
 
 
 # =============================================================================

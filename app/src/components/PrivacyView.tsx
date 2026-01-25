@@ -41,6 +41,7 @@ export function PrivacyView({ offlineMode, onUpdate }: PrivacyViewProps) {
   const [error, setError] = useState<string | null>(null);
   const [wiping, setWiping] = useState(false);
   const [wipeStatus, setWipeStatus] = useState<string | null>(null);
+  const [copyingReport, setCopyingReport] = useState(false);
 
   const fetchStatus = useCallback(async () => {
     setLoading(true);
@@ -79,6 +80,40 @@ export function PrivacyView({ offlineMode, onUpdate }: PrivacyViewProps) {
       setError(err instanceof Error ? err.message : "Failed to wipe derived data");
     } finally {
       setWiping(false);
+    }
+  }, []);
+
+  const handleWipeFaces = useCallback(async () => {
+    setError(null);
+    setWipeStatus(null);
+    const confirmed = window.confirm(
+      "Wipe face recognition data? This removes all face detections, person assignments, and face crops. " +
+      "Media files and other derived data (transcripts, thumbnails) stay intact."
+    );
+    if (!confirmed) return;
+    setWiping(true);
+    try {
+      const data = await apiRequest<WipeDerivedResponse>("/maintenance/wipe-faces", { method: "POST" });
+      setWipeStatus(data.message || "Face data wiped.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to wipe face data");
+    } finally {
+      setWiping(false);
+    }
+  }, []);
+
+  const handleCopyPrivacyReport = useCallback(async () => {
+    setError(null);
+    setCopyingReport(true);
+    try {
+      const data = await apiRequest<{ report: string }>("/network/privacy-report");
+      await navigator.clipboard.writeText(data.report);
+      setWipeStatus("Privacy report copied to clipboard");
+      setTimeout(() => setWipeStatus(null), 3000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to copy privacy report");
+    } finally {
+      setCopyingReport(false);
     }
   }, []);
 
@@ -170,6 +205,22 @@ export function PrivacyView({ offlineMode, onUpdate }: PrivacyViewProps) {
         </div>
 
         <div className="privacy-card">
+          <h3>Privacy Report</h3>
+          <p className="privacy-note">
+            Copy a summary of network activity, models installed, and data location for verification.
+          </p>
+          <div className="privacy-wipe-actions">
+            <button 
+              className="btn btn-secondary" 
+              onClick={handleCopyPrivacyReport} 
+              disabled={copyingReport}
+            >
+              {copyingReport ? "Copying..." : "Copy Privacy Report"}
+            </button>
+          </div>
+        </div>
+
+        <div className="privacy-card">
           <h3>Derived data controls</h3>
           <p className="privacy-note">
             Clear transcripts, thumbnails, detections, face crops, and indexes. Media files are untouched.
@@ -180,6 +231,19 @@ export function PrivacyView({ offlineMode, onUpdate }: PrivacyViewProps) {
             </button>
           </div>
           {wipeStatus && <div className="privacy-wipe-status">{wipeStatus}</div>}
+        </div>
+
+        <div className="privacy-card">
+          <h3>Face data controls</h3>
+          <p className="privacy-note">
+            Wipe only face recognition data (faces, person assignments, face crops). 
+            Other derived data (transcripts, thumbnails, detections) remains intact.
+          </p>
+          <div className="privacy-wipe-actions">
+            <button className="btn btn-secondary" onClick={handleWipeFaces} disabled={wiping}>
+              {wiping ? "Wiping..." : "Wipe Faces Only"}
+            </button>
+          </div>
         </div>
       </div>
 

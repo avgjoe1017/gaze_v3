@@ -29,9 +29,22 @@ MIGRATION_COLUMNS = {
         ("camera_model", "TEXT"),
         ("gps_lat", "REAL"),
         ("gps_lng", "REAL"),
+        ("transcript", "TEXT"),
     ],
     "frames": [
         ("colors", "TEXT"),
+    ],
+    "faces": [
+        ("assignment_source", "TEXT DEFAULT 'legacy'"),
+        ("assignment_confidence", "REAL"),
+        ("assigned_at_ms", "INTEGER"),
+    ],
+    "persons": [
+        ("recognition_mode", "TEXT DEFAULT 'average'"),
+    ],
+    "media": [
+        ("is_live_photo_component", "INTEGER DEFAULT 0"),
+        ("live_photo_pair_id", "TEXT"),
     ],
 }
 
@@ -80,6 +93,9 @@ async def init_database(path: Path) -> None:
 
         # Backfill media table for existing videos (safe on first run too)
         await _backfill_media_from_videos(db)
+
+        # Backfill face assignment sources for existing data
+        await _backfill_face_assignment_sources(db)
 
         await db.commit()
 
@@ -292,10 +308,77 @@ CREATE TABLE IF NOT EXISTS faces (
     person_id TEXT,
     -- Cluster ID for auto-grouping (before manual assignment)
     cluster_id TEXT,
+    -- Learning system fields
+    assignment_source TEXT DEFAULT 'legacy',
+    assignment_confidence REAL,
+    assigned_at_ms INTEGER,
     created_at_ms INTEGER NOT NULL,
     FOREIGN KEY(video_id) REFERENCES videos(video_id) ON DELETE CASCADE,
     FOREIGN KEY(frame_id) REFERENCES frames(frame_id) ON DELETE CASCADE,
     FOREIGN KEY(person_id) REFERENCES persons(person_id) ON DELETE SET NULL
+);
+
+-- Reference faces marked by users as canonical examples
+CREATE TABLE IF NOT EXISTS face_references (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    face_id TEXT NOT NULL,
+    person_id TEXT NOT NULL,
+    weight REAL NOT NULL DEFAULT 1.0,
+    created_at_ms INTEGER NOT NULL,
+    UNIQUE(face_id, person_id),
+    FOREIGN KEY(face_id) REFERENCES faces(face_id) ON DELETE CASCADE,
+    FOREIGN KEY(person_id) REFERENCES persons(person_id) ON DELETE CASCADE
+);
+
+-- Negative examples: faces that should NOT match a person
+CREATE TABLE IF NOT EXISTS face_negatives (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    face_id TEXT NOT NULL,
+    person_id TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    UNIQUE(face_id, person_id),
+    FOREIGN KEY(face_id) REFERENCES faces(face_id) ON DELETE CASCADE,
+    FOREIGN KEY(person_id) REFERENCES persons(person_id) ON DELETE CASCADE
+);
+
+-- Per-person-pair thresholds for frequently confused pairs
+CREATE TABLE IF NOT EXISTS person_pair_thresholds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_a_id TEXT NOT NULL,
+    person_b_id TEXT NOT NULL,
+    threshold REAL NOT NULL DEFAULT 0.70,
+    correction_count INTEGER NOT NULL DEFAULT 1,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    UNIQUE(person_a_id, person_b_id),
+    FOREIGN KEY(person_a_id) REFERENCES persons(person_id) ON DELETE CASCADE,
+    FOREIGN KEY(person_b_id) REFERENCES persons(person_id) ON DELETE CASCADE
+);
+
+-- User favorites for media (photos and videos)
+CREATE TABLE IF NOT EXISTS media_favorites (
+    media_id TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    PRIMARY KEY(media_id),
+    FOREIGN KEY(media_id) REFERENCES media(media_id) ON DELETE CASCADE
+);
+
+-- User favorites for persons
+CREATE TABLE IF NOT EXISTS person_favorites (
+    person_id TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    PRIMARY KEY(person_id),
+    FOREIGN KEY(person_id) REFERENCES persons(person_id) ON DELETE CASCADE
+);
+
+-- User tags for media (photos and videos)
+CREATE TABLE IF NOT EXISTS media_tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_id TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    UNIQUE(media_id, tag),
+    FOREIGN KEY(media_id) REFERENCES media(media_id) ON DELETE CASCADE
 );
 """
 
@@ -322,14 +405,43 @@ CREATE INDEX IF NOT EXISTS idx_faces_frame ON faces(frame_id);
 CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);
 CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_faces_timestamp ON faces(video_id, timestamp_ms);
+CREATE INDEX IF NOT EXISTS idx_faces_assignment_source ON faces(assignment_source);
+CREATE INDEX IF NOT EXISTS idx_faces_assignment_confidence ON faces(assignment_confidence);
 CREATE INDEX IF NOT EXISTS idx_persons_name ON persons(name);
+-- Face learning indexes
+CREATE INDEX IF NOT EXISTS idx_face_references_person ON face_references(person_id);
+CREATE INDEX IF NOT EXISTS idx_face_references_face ON face_references(face_id);
+CREATE INDEX IF NOT EXISTS idx_face_negatives_person ON face_negatives(person_id);
+CREATE INDEX IF NOT EXISTS idx_face_negatives_face ON face_negatives(face_id);
+CREATE INDEX IF NOT EXISTS idx_person_pair_thresholds_a ON person_pair_thresholds(person_a_id);
+CREATE INDEX IF NOT EXISTS idx_person_pair_thresholds_b ON person_pair_thresholds(person_b_id);
 -- Media indexes
 CREATE INDEX IF NOT EXISTS idx_media_library ON media(library_id);
 CREATE INDEX IF NOT EXISTS idx_media_type ON media(media_type);
 CREATE INDEX IF NOT EXISTS idx_media_fingerprint ON media(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_media_creation_time ON media(creation_time);
 CREATE INDEX IF NOT EXISTS idx_media_metadata ON media_metadata(media_id, key);
+-- User data indexes
+CREATE INDEX IF NOT EXISTS idx_media_favorites_media ON media_favorites(media_id);
+CREATE INDEX IF NOT EXISTS idx_person_favorites_person ON person_favorites(person_id);
+CREATE INDEX IF NOT EXISTS idx_media_tags_media ON media_tags(media_id);
+CREATE INDEX IF NOT EXISTS idx_media_tags_tag ON media_tags(tag);
 """
+
+
+async def _backfill_face_assignment_sources(db: aiosqlite.Connection) -> None:
+    """Backfill existing face assignments as 'legacy' source."""
+    # Only update faces that have a person_id but no assignment_source set
+    # (assignment_source would be NULL for old data before migration added the column)
+    await db.execute(
+        """
+        UPDATE faces
+        SET assignment_source = 'legacy',
+            assigned_at_ms = created_at_ms
+        WHERE person_id IS NOT NULL
+          AND assignment_source IS NULL
+        """
+    )
 
 
 async def _backfill_media_from_videos(db: aiosqlite.Connection) -> None:

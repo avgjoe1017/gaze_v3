@@ -1,8 +1,16 @@
-# This directory holds platform-specific engine binaries
-# Built by scripts/build-engine.ps1 or scripts/build-engine.sh
+# This directory holds platform-specific binaries for Tauri sidecars
 #
-# Expected files after build:
+# Engine binaries (built by scripts/build-engine.ps1 or scripts/build-engine.sh):
 # - gaze-engine-x86_64-pc-windows-msvc.exe (Windows)
 # - gaze-engine-aarch64-apple-darwin (macOS ARM)
 # - gaze-engine-x86_64-apple-darwin (macOS Intel)
 # - gaze-engine-x86_64-unknown-linux-gnu (Linux)
+#
+# FFmpeg binaries (download using scripts/download-ffmpeg-binaries.ps1 or .sh):
+# - ffmpeg-x86_64-pc-windows-msvc.exe (Windows)
+# - ffprobe-x86_64-pc-windows-msvc.exe (Windows)
+# - ffmpeg-aarch64-apple-darwin, ffprobe-aarch64-apple-darwin (macOS ARM)
+# - ffmpeg-x86_64-apple-darwin, ffprobe-x86_64-apple-darwin (macOS Intel)
+# - ffmpeg-x86_64-unknown-linux-gnu, ffprobe-x86_64-unknown-linux-gnu (Linux)
+#
+# See README.md in this directory for detailed instructions.

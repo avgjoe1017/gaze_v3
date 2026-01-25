@@ -176,6 +176,7 @@ export function Faces() {
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [favoritePersonIds, setFavoritePersonIds] = useState<Set<string>>(new Set());
   const [selectedPersonIds, setSelectedPersonIds] = useState<Set<string>>(new Set());
+  const [selectedCluster, setSelectedCluster] = useState<FaceCluster | null>(null);
 
   // Fetch API base URL
   useEffect(() => {
@@ -198,6 +199,65 @@ export function Faces() {
     };
   }, []);
 
+  // Load person favorites from API on mount
+  useEffect(() => {
+    async function loadPersonFavorites() {
+      try {
+        const { apiRequest } = await import("../lib/apiClient");
+        const favoriteIdsList = await apiRequest<string[]>("/favorites/persons");
+        setFavoritePersonIds(new Set(favoriteIdsList));
+        console.log("Loaded person favorites from API:", favoriteIdsList.length, "items");
+
+        // Migrate localStorage data if it exists (one-time migration)
+        if (typeof window !== "undefined") {
+          try {
+            const storedFavorites = window.localStorage.getItem("gaze.personFavorites");
+            if (storedFavorites) {
+              const parsed = JSON.parse(storedFavorites);
+              if (parsed.length > 0) {
+                console.log("Migrating person favorites from localStorage to database...");
+                for (const personId of parsed) {
+                  try {
+                    await apiRequest("/favorites/persons", {
+                      method: "POST",
+                      body: JSON.stringify({ person_id: personId }),
+                    });
+                  } catch (e) {
+                    console.error("Failed to migrate person favorite:", personId, e);
+                  }
+                }
+                // Reload favorites after migration
+                const migratedFavorites = await apiRequest<string[]>("/favorites/persons");
+                setFavoritePersonIds(new Set(migratedFavorites));
+                // Clear localStorage after successful migration
+                window.localStorage.removeItem("gaze.personFavorites");
+              }
+            }
+          } catch (migrationError) {
+            console.error("Failed to migrate localStorage data:", migrationError);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to load person favorites from API:", error);
+        // Fallback: try to load from localStorage if API fails (for backwards compatibility during transition)
+        if (typeof window !== "undefined") {
+          try {
+            const storedFavorites = window.localStorage.getItem("gaze.personFavorites");
+            if (storedFavorites) {
+              const parsed = JSON.parse(storedFavorites);
+              setFavoritePersonIds(new Set(parsed));
+              console.log("Loaded person favorites from localStorage (fallback):", parsed.length, "items");
+            }
+          } catch (e) {
+            console.error("Failed to load from localStorage fallback:", e);
+          }
+        }
+      }
+    }
+
+    loadPersonFavorites();
+  }, []);
+
   // Fetch data based on view mode
   useEffect(() => {
     fetchStats();
@@ -214,29 +274,6 @@ export function Faces() {
       fetchFaces(selectedPerson.person_id);
     }
   }, [selectedPerson]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const stored = window.localStorage.getItem("gaze.personFavorites");
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) {
-          setFavoritePersonIds(new Set(parsed));
-        }
-      } catch {
-        setFavoritePersonIds(new Set());
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(
-      "gaze.personFavorites",
-      JSON.stringify(Array.from(favoritePersonIds))
-    );
-  }, [favoritePersonIds]);
 
   useEffect(() => {
     if (viewMode === "people") {
@@ -313,6 +350,23 @@ export function Faces() {
     [apiBaseUrl]
   );
 
+  const resolveAssetUrl = useCallback(
+    (path?: string | null, size: "grid" | "full" = "grid") => {
+      if (!path) return "";
+      if (isTauri) {
+        // For Tauri, try to use _grid variant for grid size
+        if (size === "grid") {
+          const gridPath = path.replace(/\.jpg$/, "_grid.jpg");
+          return convertFileSrc(gridPath);
+        }
+        return convertFileSrc(path);
+      }
+      if (!apiBaseUrl) return "";
+      return `${apiBaseUrl}/assets/thumbnail?path=${encodeURIComponent(path)}&size=${size}`;
+    },
+    [apiBaseUrl]
+  );
+
   const toggleFaceSelection = (faceId: string) => {
     setSelectedFaces((prev) => {
       const next = new Set(prev);
@@ -331,16 +385,39 @@ export function Faces() {
     setShowNameModal(true);
   };
 
-  const toggleFavorite = (personId: string) => {
-    setFavoritePersonIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(personId)) {
-        next.delete(personId);
+  const toggleFavorite = async (personId: string) => {
+    console.log("Toggling person favorite for:", personId);
+    const isFavorite = favoritePersonIds.has(personId);
+
+    try {
+      const { apiRequest } = await import("../lib/apiClient");
+      
+      if (isFavorite) {
+        await apiRequest(`/favorites/persons/${personId}`, {
+          method: "DELETE",
+        });
+        setFavoritePersonIds((prev) => {
+          const next = new Set(prev);
+          next.delete(personId);
+          console.log("Removed person from favorites:", personId);
+          return next;
+        });
       } else {
-        next.add(personId);
+        await apiRequest("/favorites/persons", {
+          method: "POST",
+          body: JSON.stringify({ person_id: personId }),
+        });
+        setFavoritePersonIds((prev) => {
+          const next = new Set(prev);
+          next.add(personId);
+          console.log("Added person to favorites:", personId);
+          return next;
+        });
       }
-      return next;
-    });
+      console.log("Total person favorites now:", favoritePersonIds.size + (isFavorite ? -1 : 1));
+    } catch (error) {
+      console.error("Failed to toggle person favorite:", error);
+    }
   };
 
   const togglePersonSelection = (personId: string) => {
@@ -726,7 +803,7 @@ export function Faces() {
                         className="person-card-main"
                         onClick={() => {
                           setSelectedPerson(person);
-                          fetchFaces(person.person_id);
+                          fetchTimeline(person.person_id);
                         }}
                       >
                         <div className="person-thumbnail">
@@ -766,16 +843,6 @@ export function Faces() {
                         title="Toggle favorite"
                       >
                         <StarIcon filled={favoritePersonIds.has(person.person_id)} />
-                      </button>
-                      <button
-                        className="btn-icon timeline-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          fetchTimeline(person.person_id);
-                        }}
-                        title="View timeline"
-                      >
-                        <ClockIcon />
                       </button>
                     </div>
                   ))}
@@ -809,7 +876,7 @@ export function Faces() {
                         className="person-card-main"
                         onClick={() => {
                           setSelectedPerson(person);
-                          fetchFaces(person.person_id);
+                          fetchTimeline(person.person_id);
                         }}
                       >
                         <div className="person-thumbnail">
@@ -850,16 +917,6 @@ export function Faces() {
                       >
                         <StarIcon filled={favoritePersonIds.has(person.person_id)} />
                       </button>
-                      <button
-                        className="btn-icon timeline-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          fetchTimeline(person.person_id);
-                        }}
-                        title="View timeline"
-                      >
-                        <ClockIcon />
-                      </button>
                     </div>
                   ))
                 )}
@@ -876,7 +933,11 @@ export function Faces() {
               </div>
             ) : (
               clusters.map((cluster) => (
-                <div key={cluster.cluster_id} className="cluster-card">
+                <div
+                  key={cluster.cluster_id}
+                  className="cluster-card"
+                  onClick={() => setSelectedCluster(cluster)}
+                >
                   <div className="cluster-faces">
                     {cluster.sample_faces.slice(0, 4).map((face) => (
                       <div key={face.face_id} className="cluster-face">
@@ -1041,8 +1102,8 @@ export function Faces() {
 
       {/* Timeline Modal */}
       {(showTimeline || timelineLoading) && (
-        <div className="modal-overlay" onClick={() => { setShowTimeline(false); setTimeline(null); }}>
-          <div className="timeline-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="timeline-panel">
+          <div className="timeline-panel-content">
             <div className="timeline-header">
               <div className="timeline-title">
                 <ClockIcon />
@@ -1080,7 +1141,7 @@ export function Faces() {
                           <div className="timeline-video-thumb">
                             {video.thumbnail_path ? (
                               <img
-                                src={resolveFaceUrl(video.thumbnail_path)}
+                                src={resolveAssetUrl(video.thumbnail_path, "grid")}
                                 alt=""
                               />
                             ) : (
@@ -1132,6 +1193,72 @@ export function Faces() {
                   <p>This person hasn't been detected in any videos yet.</p>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cluster Action Modal */}
+      {selectedCluster && (
+        <div className="modal-overlay" onClick={() => setSelectedCluster(null)}>
+          <div className="modal-content cluster-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Assign {selectedCluster.face_count} faces</h3>
+              <button className="btn-icon" onClick={() => setSelectedCluster(null)}>
+                <CloseIcon />
+              </button>
+            </div>
+            <div className="cluster-preview">
+              {selectedCluster.sample_faces.slice(0, 8).map((face) => (
+                <div key={face.face_id} className="cluster-preview-face">
+                  {face.crop_path ? (
+                    <img src={resolveFaceUrl(face.crop_path)} alt="" />
+                  ) : (
+                    <div className="placeholder">
+                      <UserIcon />
+                    </div>
+                  )}
+                </div>
+              ))}
+              {selectedCluster.face_count > 8 && (
+                <div className="cluster-preview-more">
+                  +{selectedCluster.face_count - 8} more
+                </div>
+              )}
+            </div>
+            <div className="modal-actions">
+              <button
+                className="btn btn-primary"
+                onClick={() => handleNameCluster(selectedCluster.cluster_id)}
+              >
+                <UserIcon />
+                Create New Person
+              </button>
+              <button
+                className="btn btn-secondary"
+                onClick={() => {
+                  // TODO: Implement assign to existing person
+                  console.log("Assign to existing person");
+                  setSelectedCluster(null);
+                }}
+              >
+                <UsersIcon />
+                Assign to Existing Person
+              </button>
+              <button
+                className="btn btn-secondary"
+                onClick={() => {
+                  // TODO: Implement delete cluster
+                  console.log("Delete cluster");
+                  setSelectedCluster(null);
+                }}
+              >
+                <TrashIcon />
+                Delete Faces
+              </button>
+              <button className="btn btn-ghost" onClick={() => setSelectedCluster(null)}>
+                Cancel
+              </button>
             </div>
           </div>
         </div>

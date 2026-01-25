@@ -1,12 +1,64 @@
 """FFmpeg utilities for video processing."""
 
 import asyncio
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
 from .logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def get_ffmpeg_path() -> str:
+    """Get FFmpeg executable path.
+    
+    Checks in order:
+    1. GAZE_FFMPEG_PATH environment variable (bundled sidecar)
+    2. PATH (system installation)
+    
+    Returns:
+        Path to ffmpeg executable, or "ffmpeg" if not found (will fail later)
+    """
+    # Check environment variable first (bundled sidecar)
+    ffmpeg_path = os.environ.get("GAZE_FFMPEG_PATH")
+    
+    if ffmpeg_path and Path(ffmpeg_path).exists():
+        return ffmpeg_path
+    
+    # Fallback to PATH
+    path_result = shutil.which("ffmpeg")
+    if path_result:
+        return path_result
+    
+    # Last resort: return "ffmpeg" (will fail with clear error if not in PATH)
+    return "ffmpeg"
+
+
+def get_ffprobe_path() -> str:
+    """Get FFprobe executable path.
+    
+    Checks in order:
+    1. GAZE_FFPROBE_PATH environment variable (bundled sidecar)
+    2. PATH (system installation)
+    
+    Returns:
+        Path to ffprobe executable, or "ffprobe" if not found (will fail later)
+    """
+    # Check environment variable first (bundled sidecar)
+    ffprobe_path = os.environ.get("GAZE_FFPROBE_PATH")
+    
+    if ffprobe_path and Path(ffprobe_path).exists():
+        return ffprobe_path
+    
+    # Fallback to PATH
+    path_result = shutil.which("ffprobe")
+    if path_result:
+        return path_result
+    
+    # Last resort: return "ffprobe" (will fail with clear error if not in PATH)
+    return "ffprobe"
 
 
 async def extract_audio(video_path: Path, output_path: Path, sample_rate: int = 16000) -> None:
@@ -28,7 +80,7 @@ async def extract_audio(video_path: Path, output_path: Path, sample_rate: int = 
 
     # FFmpeg command: extract audio, convert to 16kHz mono WAV
     cmd = [
-        "ffmpeg",
+        get_ffmpeg_path(),
         "-i", str(video_path),
         "-vn",  # No video
         "-acodec", "pcm_s16le",  # 16-bit PCM
@@ -88,10 +140,10 @@ async def extract_frames(
     output_pattern = str(output_dir / f"frame_%06d.{image_format}")
 
     cmd = [
-        "ffmpeg",
+        get_ffmpeg_path(),
         "-i", str(video_path),
         "-vf", f"fps=1/{interval_seconds}",
-        "-q:v", "2",  # High quality JPEG
+        "-q:v", "5",  # Medium quality JPEG (was 2 - high quality)
         "-y",  # Overwrite output files
         output_pattern,
     ]
@@ -155,7 +207,7 @@ def detect_nonsilent_segments(
     min_silence_s = max(min_silence_ms, 100) / 1000.0
 
     cmd = [
-        "ffmpeg",
+        get_ffmpeg_path(),
         "-i", str(audio_path),
         "-af", f"silencedetect=noise={silence_threshold_db}dB:d={min_silence_s}",
         "-f", "null",
@@ -223,7 +275,7 @@ def extract_audio_segment(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
-        "ffmpeg",
+        get_ffmpeg_path(),
         "-i", str(input_path),
         "-ss", f"{start_seconds:.3f}",
         "-to", f"{end_seconds:.3f}",

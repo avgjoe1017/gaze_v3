@@ -39,6 +39,32 @@ IN_PROGRESS_STATUSES = (
 )
 
 
+def detect_live_photo_pairs(files: list[Path]) -> dict[Path, Path]:
+    """Detect iPhone LIVE photo pairs (.heic/.jpg + .mov).
+
+    Returns a mapping of photo_path -> video_path for detected pairs.
+    """
+    pairs: dict[Path, Path] = {}
+
+    # Group files by stem (filename without extension)
+    photo_files = {f for f in files if f.suffix.lower() in {".heic", ".heif", ".jpg", ".jpeg"}}
+    video_files = {f for f in files if f.suffix.lower() == ".mov"}
+
+    for photo in photo_files:
+        # Look for matching .mov with same stem
+        matching_mov = photo.with_suffix(".mov")
+        if matching_mov not in video_files:
+            matching_mov = photo.with_suffix(".MOV")
+
+        if matching_mov in video_files:
+            # LIVE photos are very short videos (typically 1.5-3 seconds)
+            # We'll mark them as pairs and verify duration during indexing
+            pairs[photo] = matching_mov
+
+    logger.info(f"Detected {len(pairs)} potential LIVE photo pairs")
+    return pairs
+
+
 def compute_fingerprint(path: Path) -> str:
     """
     Compute a content fingerprint for a file.
@@ -147,6 +173,32 @@ async def scan_library(library_id: str, folder_path: str, recursive: bool = True
             else:
                 metadata = await get_image_metadata(media_path)
 
+            # Check if this file is part of a LIVE photo pair
+            is_live_component = False
+            live_pair_id = None
+
+            if media_type == "photo" and media_path.suffix.lower() in {".heic", ".heif", ".jpg", ".jpeg"}:
+                # Check if there's a matching .mov file
+                matching_mov = media_path.with_suffix(".mov")
+                if not matching_mov.exists():
+                    matching_mov = media_path.with_suffix(".MOV")
+
+                if matching_mov.exists():
+                    # This photo has a paired video - mark the video as LIVE component
+                    live_pair_id = fingerprint  # Use photo's fingerprint as pair ID
+            elif media_type == "video" and media_path.suffix.lower() == ".mov":
+                # Check if there's a matching photo file
+                for ext in [".heic", ".HEIC", ".heif", ".HEIF", ".jpg", ".JPG", ".jpeg", ".JPEG"]:
+                    matching_photo = media_path.with_suffix(ext)
+                    if matching_photo.exists():
+                        # Verify it's a short video (LIVE photos are < 5 seconds)
+                        duration_ms = metadata.get("duration_ms") if metadata else None
+                        if duration_ms and duration_ms < 5000:  # Less than 5 seconds
+                            is_live_component = True
+                            # Use the photo's fingerprint as pair ID
+                            live_pair_id = compute_fingerprint(matching_photo)
+                        break
+
             if path_str in existing_media:
                 media_id, old_media_type, old_fingerprint = existing_media[path_str]
 
@@ -163,6 +215,7 @@ async def scan_library(library_id: str, folder_path: str, recursive: bool = True
                                 duration_ms = ?, width = ?, height = ?,
                                 creation_time = ?, camera_make = ?, camera_model = ?,
                                 gps_lat = ?, gps_lng = ?,
+                                is_live_photo_component = ?, live_photo_pair_id = ?,
                                 status = 'QUEUED', progress = 0, error_code = NULL, error_message = NULL
                             WHERE media_id = ?
                             """,
@@ -180,6 +233,8 @@ async def scan_library(library_id: str, folder_path: str, recursive: bool = True
                                 metadata.get("camera_model") if metadata else None,
                                 metadata.get("gps_lat") if metadata else None,
                                 metadata.get("gps_lng") if metadata else None,
+                                1 if is_live_component else 0,
+                                live_pair_id,
                                 media_id,
                             ),
                         )
@@ -373,9 +428,10 @@ async def scan_library(library_id: str, folder_path: str, recursive: bool = True
                             media_id, library_id, path, filename, file_ext, media_type,
                             file_size, mtime_ms, fingerprint, duration_ms, width, height,
                             creation_time, camera_make, camera_model, gps_lat, gps_lng,
+                            is_live_photo_component, live_photo_pair_id,
                             status, progress, indexed_at_ms, created_at_ms
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', 0, NULL, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', 0, NULL, ?)
                         """,
                         (
                             media_id,
@@ -395,6 +451,8 @@ async def scan_library(library_id: str, folder_path: str, recursive: bool = True
                             metadata.get("camera_model") if metadata else None,
                             metadata.get("gps_lat") if metadata else None,
                             metadata.get("gps_lng") if metadata else None,
+                            1 if is_live_component else 0,
+                            live_pair_id,
                             created_at_ms,
                         ),
                     )

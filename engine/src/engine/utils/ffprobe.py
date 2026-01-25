@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .ffmpeg import get_ffprobe_path
 from .logging import get_logger
 
 logger = get_logger(__name__)
@@ -97,7 +98,7 @@ async def get_video_metadata(video_path: Path) -> dict:
 
     # FFprobe command to get comprehensive JSON output
     cmd = [
-        "ffprobe",
+        get_ffprobe_path(),
         "-v", "error",
         "-show_format",
         "-show_streams",

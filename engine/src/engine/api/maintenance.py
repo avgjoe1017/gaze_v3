@@ -159,6 +159,63 @@ async def _run_face_detection(video_id: str, video_path: str, media_type: str) -
     )
 
 
+@router.post("/wipe-faces", response_model=WipeDerivedDataResponse)
+async def wipe_faces_only(_token: str = Depends(verify_token)) -> WipeDerivedDataResponse:
+    """Wipe only face recognition data (faces, person assignments, face crops)."""
+    logger.info("Wiping face data only")
+    
+    cleared_rows: dict[str, int] = {}
+    async for db in get_db():
+        # Capture counts before deletion
+        cursor = await db.execute("SELECT COUNT(*) as count FROM faces")
+        row = await cursor.fetchone()
+        cleared_rows["faces"] = row["count"] if row else 0
+        
+        cursor = await db.execute("SELECT COUNT(*) as count FROM face_references")
+        row = await cursor.fetchone()
+        cleared_rows["face_references"] = row["count"] if row else 0
+        
+        cursor = await db.execute("SELECT COUNT(*) as count FROM face_negatives")
+        row = await cursor.fetchone()
+        cleared_rows["face_negatives"] = row["count"] if row else 0
+        
+        cursor = await db.execute("SELECT COUNT(*) as count FROM person_pair_thresholds")
+        row = await cursor.fetchone()
+        cleared_rows["person_pair_thresholds"] = row["count"] if row else 0
+
+        # Clear face-related tables
+        await db.execute("DELETE FROM face_references")
+        await db.execute("DELETE FROM face_negatives")
+        await db.execute("DELETE FROM person_pair_thresholds")
+        await db.execute("DELETE FROM faces")
+
+        # Reset face metadata on persons
+        now_ms = int(datetime.now().timestamp() * 1000)
+        await db.execute(
+            """
+            UPDATE persons
+            SET face_count = 0, thumbnail_face_id = NULL, updated_at_ms = ?
+            """,
+            (now_ms,),
+        )
+
+        await db.commit()
+
+    # Clear face crop files on disk
+    faces_dir = get_faces_dir()
+    cleared_files = {
+        "faces": _wipe_directory(faces_dir),
+    }
+
+    logger.info("Face data wipe complete")
+    return WipeDerivedDataResponse(
+        status="ok",
+        cleared_rows=cleared_rows,
+        cleared_files=cleared_files,
+        message="Face recognition data wiped. Face detection can be re-run if face recognition is enabled.",
+    )
+
+
 @router.post("/detect-faces", response_model=FaceDetectResponse)
 async def detect_faces_pass(
     request: FaceDetectRequest,

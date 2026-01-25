@@ -55,6 +55,8 @@ class Video(BaseModel):
     camera_model: str | None = None
     gps_lat: float | None = None
     gps_lng: float | None = None
+    # AI-generated content
+    transcript: str | None = None
     # Processing state
     status: VideoStatus
     progress: float = 0.0
@@ -140,6 +142,7 @@ async def list_videos(
                 v.container_format, v.rotation,
                 v.creation_time, v.camera_make, v.camera_model,
                 v.gps_lat, v.gps_lng,
+                v.transcript,
                 v.status, v.progress, v.error_code, v.error_message,
                 v.created_at_ms, v.indexed_at_ms,
                 (SELECT f.thumbnail_path FROM frames f WHERE f.video_id = v.video_id ORDER BY f.frame_index ASC LIMIT 1) as thumbnail_path
@@ -174,6 +177,7 @@ async def list_videos(
                 camera_model=row["camera_model"],
                 gps_lat=row["gps_lat"],
                 gps_lng=row["gps_lng"],
+                transcript=row["transcript"],
                 status=row["status"],
                 progress=row["progress"],
                 error_code=row["error_code"],
@@ -202,6 +206,7 @@ async def get_video(video_id: str, _token: str = Depends(verify_token)) -> Video
                 v.container_format, v.rotation,
                 v.creation_time, v.camera_make, v.camera_model,
                 v.gps_lat, v.gps_lng,
+                v.transcript,
                 v.status, v.progress, v.error_code, v.error_message,
                 v.created_at_ms, v.indexed_at_ms,
                 (SELECT f.thumbnail_path FROM frames f WHERE f.video_id = v.video_id ORDER BY f.frame_index ASC LIMIT 1) as thumbnail_path
@@ -237,6 +242,7 @@ async def get_video(video_id: str, _token: str = Depends(verify_token)) -> Video
             camera_model=row["camera_model"],
             gps_lat=row["gps_lat"],
             gps_lng=row["gps_lng"],
+            transcript=row["transcript"],
             status=row["status"],
             progress=row["progress"],
             error_code=row["error_code"],

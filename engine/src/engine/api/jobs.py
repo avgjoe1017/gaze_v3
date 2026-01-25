@@ -6,7 +6,15 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from ..core.indexer import start_indexing_queued_videos, stop_indexing
+from ..core.indexer import (
+    start_indexing_queued_videos,
+    stop_indexing,
+    upgrade_to_deep_indexing,
+    regenerate_grid_thumbnails,
+    pause_indexing,
+    resume_indexing,
+    is_indexing_paused,
+)
 from ..db.connection import get_db
 from ..middleware.auth import verify_token
 from ..utils.logging import get_logger
@@ -84,6 +92,29 @@ async def list_jobs(_token: str = Depends(verify_token)) -> JobsResponse:
         ]
 
         return JobsResponse(jobs=jobs)
+
+
+# IMPORTANT: This route must be defined BEFORE /{job_id} below
+# Otherwise FastAPI will match "/status" as a job_id parameter
+@router.get("/status")
+async def get_indexing_status(_token: str = Depends(verify_token)) -> dict:
+    """Get indexing status (paused state and active job count)."""
+    from ..core.indexer import _active_jobs
+    
+    active_count = len([t for t in _active_jobs.values() if not t.done()])
+    queued_count = 0
+    async for db in get_db():
+        cursor = await db.execute(
+            "SELECT COUNT(*) as count FROM videos WHERE status = 'QUEUED'"
+        )
+        row = await cursor.fetchone()
+        queued_count = row["count"] if row else 0
+    
+    return {
+        "paused": is_indexing_paused(),
+        "active_jobs": active_count,
+        "queued_videos": queued_count,
+    }
 
 
 @router.get("/{job_id}", response_model=Job)
@@ -192,3 +223,60 @@ async def start_indexing(
     asyncio.create_task(start_indexing_queued_videos(limit))
     logger.info(f"Indexing started for up to {limit} queued videos")
     return {"status": "started", "message": f"Indexing queued for up to {limit} videos"}
+
+
+@router.post("/upgrade-to-deep")
+async def upgrade_deep(
+    library_id: str | None = Query(None, description="Optional library ID to limit upgrade"),
+    _token: str = Depends(verify_token),
+) -> dict:
+    """
+    Upgrade already-indexed videos to deep mode.
+
+    Runs enhanced stages (object detection, face detection, transcription)
+    on videos that were previously indexed with 'quick' preset.
+    This allows you to start with quick indexing and later upgrade to deep
+    without re-indexing everything from scratch.
+    """
+    result = await upgrade_to_deep_indexing(library_id)
+    logger.info(f"Deep upgrade: {result['upgraded']} videos queued, {result['skipped']} skipped")
+    return {
+        "status": "started",
+        "message": f"Deep upgrade started for {result['upgraded']} videos",
+        "upgraded": result["upgraded"],
+        "skipped": result["skipped"],
+    }
+
+
+@router.post("/regenerate-grid-thumbnails")
+async def regenerate_grid_thumbs(
+    _token: str = Depends(verify_token),
+) -> dict:
+    """
+    Regenerate grid thumbnails for all existing indexed media.
+
+    Creates small, fast-loading thumbnails (256px, 50% quality) for the media grid.
+    Run this once after upgrading to benefit from faster thumbnail loading.
+    """
+    asyncio.create_task(regenerate_grid_thumbnails())
+    logger.info("Grid thumbnail regeneration started")
+    return {
+        "status": "started",
+        "message": "Grid thumbnail regeneration started in background",
+    }
+
+
+@router.post("/pause")
+async def pause_indexing_endpoint(_token: str = Depends(verify_token)) -> dict:
+    """Pause indexing (stops starting new jobs, but doesn't cancel running ones)."""
+    pause_indexing()
+    return {"status": "paused", "message": "Indexing paused"}
+
+
+@router.post("/resume")
+async def resume_indexing_endpoint(_token: str = Depends(verify_token)) -> dict:
+    """Resume indexing."""
+    resume_indexing()
+    # Trigger a check to start indexing if there are queued videos
+    asyncio.create_task(start_indexing_queued_videos(limit=10))
+    return {"status": "resumed", "message": "Indexing resumed"}

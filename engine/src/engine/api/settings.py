@@ -21,6 +21,7 @@ DEFAULT_SETTINGS = {
     "frame_interval_seconds": 2.0,
     "faiss_cache_max": 8,
     "indexing_preset": "deep",
+    "prioritize_recent_media": False,
     "transcription_model": "base",
     "transcription_language": None,
     "transcription_backend": "auto",
@@ -41,6 +42,7 @@ class Settings(BaseModel):
     frame_interval_seconds: float = 2.0
     faiss_cache_max: int = 8
     indexing_preset: str = "deep"
+    prioritize_recent_media: bool = False
     transcription_model: str = "base"
     transcription_language: str | None = None
     transcription_backend: str = "auto"
@@ -60,6 +62,7 @@ class SettingsUpdate(BaseModel):
     frame_interval_seconds: float | None = None
     faiss_cache_max: int | None = None
     indexing_preset: str | None = None
+    prioritize_recent_media: bool | None = None
     transcription_model: str | None = None
     transcription_language: str | None = None
     transcription_backend: str | None = None

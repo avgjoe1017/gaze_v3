@@ -45,6 +45,7 @@ export function LogViewer({ port }: LogViewerProps) {
   const [lines, setLines] = useState(200);
   const [levelFilter, setLevelFilter] = useState<string>("");
   const [autoRefresh, setAutoRefresh] = useState(false);
+  const [redactPaths, setRedactPaths] = useState(false);
   const logContainerRef = useRef<HTMLDivElement>(null);
 
   const fetchLogs = async () => {
@@ -57,6 +58,9 @@ export function LogViewer({ port }: LogViewerProps) {
       });
       if (levelFilter) {
         params.append("level", levelFilter);
+      }
+      if (redactPaths) {
+        params.append("redact_paths", "true");
       }
 
       const { apiRequest } = await import("../lib/apiClient");
@@ -78,7 +82,7 @@ export function LogViewer({ port }: LogViewerProps) {
       const interval = setInterval(fetchLogs, 2000); // Refresh every 2 seconds
       return () => clearInterval(interval);
     }
-  }, [autoRefresh, port, lines, levelFilter]);
+  }, [autoRefresh, port, lines, levelFilter, redactPaths]);
 
   // Auto-scroll to bottom when new logs arrive
   useEffect(() => {
@@ -153,6 +157,25 @@ export function LogViewer({ port }: LogViewerProps) {
           >
             <div className={`auto-refresh-indicator ${autoRefresh ? "pulsing" : ""}`} />
           </button>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12,
+              cursor: "pointer",
+              padding: "4px 8px",
+            }}
+            title="Redact file paths and filenames for privacy"
+          >
+            <input
+              type="checkbox"
+              checked={redactPaths}
+              onChange={(e) => setRedactPaths(e.target.checked)}
+              style={{ cursor: "pointer" }}
+            />
+            Redact paths
+          </label>
           <button className="btn-icon" onClick={downloadLogs} title="Download logs">
             <DownloadIcon />
           </button>
